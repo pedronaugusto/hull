@@ -9,10 +9,13 @@ const std = @import("std");
 ///   hull's settings, std and strand alone.
 ///
 /// The runner (`hull`, a window or headless) and the bundler are built here;
-/// the tests and the gate are `dev`'s.
-pub fn build(b: *std.Build) void {
+/// the tests and the gate are `dev`'s. A program that only speaks
+/// hull-protocol asks for hull with `.runner = false`, and fetches nothing of
+/// the window's: its terminal, its window and its type are lazy dependencies.
+pub fn build(b: *std.Build) error{LazyDependencyNeeded}!void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.option(std.lang.Optimize, "optimize", "debug · safe (default) · fast · small") orelse .safe;
+    const with_runner = b.option(bool, "runner", "Build the runner and the bundler (default on); off, hull is its protocol alone") orelse true;
 
     const strand = b.dependency("strand", .{ .target = target, .optimize = optimize }).module("strand");
     const protocol = b.addModule("hull-protocol", .{
@@ -21,7 +24,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "strand", .module = strand }},
     });
-    const runner = b.addExecutable(.{ .name = "hull", .root_module = runnerModule(b, target, optimize, protocol, strand) });
+    if (!with_runner) return;
+    const runner = b.addExecutable(.{ .name = "hull", .root_module = try runnerModule(b, target, optimize, protocol, strand) });
     b.installArtifact(runner);
     const run = b.addRunArtifact(runner);
     run.addPassthruArgs();
@@ -80,7 +84,7 @@ pub fn dev(b: *std.Build, tools: type) void {
     const test_step = b.step("test", "Run the tests");
     const strand = p.dependency("strand", .{ .target = target, .optimize = optimize }).module("strand");
     const protocol = hull.module("hull-protocol");
-    const units = b.addTest(.{ .name = "hull-tests", .filters = filters, .root_module = runnerModule(p, target, optimize, protocol, strand) });
+    const units = b.addTest(.{ .name = "hull-tests", .filters = filters, .root_module = runnerModule(p, target, optimize, protocol, strand) catch return });
     test_step.dependOn(&b.addRunArtifact(units).step);
     const protocol_tests = b.addTest(.{ .name = "hull-protocol-tests", .filters = filters, .root_module = protocol });
     test_step.dependOn(&b.addRunArtifact(protocol_tests).step);
@@ -100,19 +104,20 @@ pub fn dev(b: *std.Build, tools: type) void {
     tools.preflight.addCi(b, p, .{ .tests = test_step });
 }
 
-// The runner: libghostty-vt from Ghostty's Zig 0.17 tree, SDL3 for the window, ztypeset for the type.
-fn runnerModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, protocol: *std.Build.Module, strand: *std.Build.Module) *std.Build.Module {
+// The runner: libghostty-vt from Ghostty's Zig 0.17 tree, SDL3 for the window, ztypeset for the type, each a lazy
+// dependency that asking for it here fetches.
+fn runnerModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, protocol: *std.Build.Module, strand: *std.Build.Module) error{LazyDependencyNeeded}!*std.Build.Module {
     // ReleaseFast whatever hull is built as: Debug terminal code is very slow, and its checks are Ghostty's to
     // run. No SIMD: its paths are C++ (simdutf, highway) the static archive does not carry at this commit.
-    const ghostty = b.dependency("ghostty", .{ .target = target, .optimize = .fast, .simd = false });
+    const ghostty = try b.dependencyLazy("ghostty", .{ .target = target, .optimize = .fast, .simd = false });
+    const sdl = try b.dependencyLazy("sdl", .{ .target = target, .optimize = optimize });
+    const zt = try b.dependencyLazy("ztypeset", .{ .target = target, .optimize = optimize });
+    const aegis = try b.dependencyLazy("aegis", .{ .target = target, .optimize = optimize });
     const vt_h = b.addTranslateC(.{ .root_source_file = ghostty.path("include/ghostty/vt.h"), .target = target, .optimize = optimize });
     vt_h.addIncludePath(ghostty.path("include"));
     vt_h.defineCMacro("GHOSTTY_STATIC", null);
-    const sdl = b.dependency("sdl", .{ .target = target, .optimize = optimize });
     const sdl_h = b.addTranslateC(.{ .root_source_file = b.path("src/c/sdl.h"), .target = target, .optimize = optimize });
     sdl_h.addIncludePath(sdl.path("include"));
-    const zt = b.dependency("ztypeset", .{ .target = target, .optimize = optimize });
-    const aegis = b.dependency("aegis", .{ .target = target, .optimize = optimize });
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,

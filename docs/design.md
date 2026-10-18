@@ -37,7 +37,8 @@ is the terminal it runs in, owned by the app. What is built is marked so; the re
 - **hull** owns the window and terminal: theme (Rosé Pine by default), background opacity (80–100, 100 by default,
   windowed only), font size, padding, full screen.
 - **The program** owns its own; a lantern game's include lantern's look and reading settings.
-- A program learns it runs in hull from `HULL_SOCKET` and speaks `hull-protocol` (std and strand alone): hull's
+- A program learns it runs in hull from `HULL_SOCKET` and speaks `hull-protocol` (std and strand alone, and its
+  build fetches nothing else: `.runner = false`, with the window's dependencies lazy): hull's
   settings declared with their kinds, values and availability, set, and changes told. A program's settings page
   shows them beside its own; in a terminal there are none.
 - hull ships words for its settings; a program may reword them by name.

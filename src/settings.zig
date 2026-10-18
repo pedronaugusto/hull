@@ -18,6 +18,11 @@ pub const words = struct {
     pub const font_size = "Text size";
     pub const padding = "Margin";
     pub const fullscreen = "Full screen";
+    /// Full screen's two values, off first.
+    pub const fullscreen_values = [_]hp.Choice{
+        .{ .name = "off", .label = "Windowed" },
+        .{ .name = "on", .label = "Full screen" },
+    };
     pub const opaque_in_fullscreen = "Full screen is always opaque";
     /// Why a set was refused, by the error hull met.
     pub fn refusal(err: anyerror) []const u8 {
@@ -139,20 +144,20 @@ pub const Settings = struct {
         const out = try a.alloc(hp.Setting, 5);
         out[0] = .{ .name = "theme", .kind = .choice, .label = words.theme, .values = &words.themes, .default = .{ .string = st.defaults.theme }, .value = .{ .string = st.theme } };
         out[1] = .{
-            .name = "background-opacity",
+            .name = "background_opacity",
             .kind = .integer,
             .label = words.background_opacity,
             .min = config.opacity_min,
             .max = config.opacity_max,
-            .step = 1,
+            .step = 5,
             .default = num(a, @floatFromInt(st.defaults.background_opacity)),
             .value = num(a, @floatFromInt(st.opacity)),
             .available = !st.is_fullscreen,
             .reason = if (st.is_fullscreen) words.opaque_in_fullscreen else null,
         };
-        out[2] = .{ .name = "font-size", .kind = .number, .label = words.font_size, .min = 8, .max = 40, .step = 1, .default = num(a, st.defaults.font_size), .value = num(a, st.font_size) };
-        out[3] = .{ .name = "padding", .kind = .integer, .label = words.padding, .min = 0, .max = 64, .step = 2, .default = num(a, @floatFromInt(st.defaults.padding_x)), .value = num(a, @floatFromInt(st.padding)) };
-        out[4] = .{ .name = "fullscreen", .kind = .toggle, .label = words.fullscreen, .default = .{ .boolean = st.fullscreen_default }, .value = .{ .boolean = st.is_fullscreen } };
+        out[2] = .{ .name = "font_size", .kind = .number, .label = words.font_size, .min = 8, .max = 40, .step = 1, .default = num(a, st.defaults.font_size), .value = num(a, st.font_size) };
+        out[3] = .{ .name = "padding", .kind = .integer, .label = words.padding, .min = 0, .max = 64, .step = 4, .default = num(a, @floatFromInt(st.defaults.padding_x)), .value = num(a, @floatFromInt(st.padding)) };
+        out[4] = .{ .name = "fullscreen", .kind = .toggle, .label = words.fullscreen, .values = &words.fullscreen_values, .default = .{ .boolean = st.fullscreen_default }, .value = .{ .boolean = st.is_fullscreen } };
         return out;
     }
 
@@ -237,7 +242,7 @@ pub const Settings = struct {
             s.setTheme(th.*);
             return .redraw;
         }
-        if (std.mem.eql(u8, name, "background-opacity")) {
+        if (std.mem.eql(u8, name, "background_opacity")) {
             const v = hp.asNumber(value) orelse return error.NotANumber;
             if (v < config.opacity_min or v > config.opacity_max) return error.OutOfRange;
             // kept while unavailable, for when the window is windowed again
@@ -245,7 +250,7 @@ pub const Settings = struct {
             s.vt.opacity = st.drawnOpacity();
             return .redraw;
         }
-        if (std.mem.eql(u8, name, "font-size")) {
+        if (std.mem.eql(u8, name, "font_size")) {
             const v = hp.asNumber(value) orelse return error.NotANumber;
             if (v < 8 or v > 40) return error.OutOfRange;
             st.font_size = @floatCast(v);
@@ -276,7 +281,7 @@ pub const Settings = struct {
         st.is_fullscreen = on;
         s.vt.opacity = st.drawnOpacity();
         st.changed(s, "fullscreen");
-        st.changed(s, "background-opacity");
+        st.changed(s, "background_opacity");
     }
 
     /// Applies what was loaded to a session not yet drawn.

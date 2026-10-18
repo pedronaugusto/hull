@@ -8,7 +8,7 @@
 //! `kind`:
 //!
 //!     hull → program  {"kind":"hello","protocol":1,"hull":"0.0.0","app":"…","settings":[…]}
-//!     program → hull  {"kind":"set","name":"background-opacity","value":90}
+//!     program → hull  {"kind":"set","name":"background_opacity","value":90}
 //!     hull → program  {"kind":"changed","setting":{…}}           any change, whoever made it
 //!     hull → program  {"kind":"refused","name":"…","reason":"…"}
 //!     program → hull  {"kind":"get"}                              hello again
@@ -42,6 +42,7 @@ pub const Setting = struct {
     min: ?f64 = null,
     max: ?f64 = null,
     step: ?f64 = null,
+    /// A choice's values, or a toggle's two in hull's words, off first.
     values: ?[]const Choice = null,
     default: Value,
     value: Value,
@@ -105,21 +106,33 @@ pub fn asNumber(v: Value) ?f64 {
     };
 }
 
-/// Lines from the channel, however they arrive.
+/// The longest line either side sends: a hello with every setting is a few kilobytes.
+pub const max_line = 64 << 10;
+
+/// Lines from the channel, however they arrive, each at most `max_line`: the other side's bytes are never
+/// believed, so a line that does not end in time is refused rather than held.
 pub const Lines = struct {
     buf: std.ArrayList(u8) = .empty,
+
+    pub const Error = error{ OutOfMemory, LineTooLong };
 
     pub fn deinit(l: *Lines, gpa: std.mem.Allocator) void {
         l.buf.deinit(gpa);
     }
 
-    pub fn feed(l: *Lines, gpa: std.mem.Allocator, bytes: []const u8) !void {
+    /// `bytes` after what came before. On `LineTooLong`, what was held is dropped: the channel is out of step.
+    pub fn feed(l: *Lines, gpa: std.mem.Allocator, bytes: []const u8) Error!void {
         try l.buf.appendSlice(gpa, bytes);
+        const start = if (std.mem.findScalarLast(u8, l.buf.items, '\n')) |nl| nl + 1 else 0;
+        if (l.buf.items.len - start > max_line) {
+            l.buf.clearRetainingCapacity();
+            return error.LineTooLong;
+        }
     }
 
     /// The next whole line, valid until the next call; null when none.
-    pub fn next(l: *Lines, scratch: *std.ArrayList(u8), gpa: std.mem.Allocator) !?[]const u8 {
-        const nl = std.mem.indexOfScalar(u8, l.buf.items, '\n') orelse return null;
+    pub fn next(l: *Lines, scratch: *std.ArrayList(u8), gpa: std.mem.Allocator) error{OutOfMemory}!?[]const u8 {
+        const nl = std.mem.findScalar(u8, l.buf.items, '\n') orelse return null;
         scratch.clearRetainingCapacity();
         try scratch.appendSlice(gpa, l.buf.items[0..nl]);
         const rest = l.buf.items.len - nl - 1;
@@ -136,7 +149,7 @@ test "a hello and a set, there and back" {
     var out: std.Io.Writer.Allocating = .init(a);
     var nb: [32]u8 = undefined;
     const settings = [_]Setting{.{
-        .name = "background-opacity",
+        .name = "background_opacity",
         .kind = .integer,
         .label = "Background opacity",
         .min = 80,
@@ -148,7 +161,7 @@ test "a hello and a set, there and back" {
         .reason = "Full screen is always opaque",
     }};
     try write(&out.writer, .{ .hello = .{ .hull = "0.0.0", .app = "dev.wake", .settings = &settings } });
-    try write(&out.writer, .{ .set = .{ .name = "background-opacity", .value = .{ .number = "90" } } });
+    try write(&out.writer, .{ .set = .{ .name = "background_opacity", .value = .{ .number = "90" } } });
     try write(&out.writer, .get);
     var it = std.mem.splitScalar(u8, out.written(), '\n');
     const hello = try read(a, it.next().?);
@@ -158,4 +171,21 @@ test "a hello and a set, there and back" {
     try std.testing.expectEqual(@as(?f64, 90), asNumber(set.set.value));
     try std.testing.expect((try read(a, it.next().?)) == .get);
     try std.testing.expectEqual(@as(?i32, 3), fd("fd:3"));
+}
+
+test "lines arrive in pieces, and one too long is refused" {
+    const gpa = std.testing.allocator;
+    var lines: Lines = .{};
+    defer lines.deinit(gpa);
+    var scratch: std.ArrayList(u8) = .empty;
+    defer scratch.deinit(gpa);
+    try lines.feed(gpa, "{\"kind\":");
+    try std.testing.expectEqual(@as(?[]const u8, null), try lines.next(&scratch, gpa));
+    try lines.feed(gpa, "\"get\"}\n{");
+    try std.testing.expectEqualStrings("{\"kind\":\"get\"}", (try lines.next(&scratch, gpa)).?);
+    const long = try gpa.alloc(u8, max_line + 2);
+    defer gpa.free(long);
+    @memset(long, 'x');
+    try std.testing.expectError(error.LineTooLong, lines.feed(gpa, long));
+    try std.testing.expectEqual(@as(?[]const u8, null), try lines.next(&scratch, gpa));
 }

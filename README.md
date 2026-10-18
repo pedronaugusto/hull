@@ -81,10 +81,12 @@ The app sets everything; nothing is read from the user's terminal configuration.
 `HULL_SOCKET=fd:3`: the channel to hull's settings. Its presence is how a program knows it runs in hull. Other
 terminals' variables (TMUX, KITTY_*, GHOSTTY_*, ITERM_*, ...) are removed. XTVERSION answers `hull <version>`.
 
-hull-protocol (`b.dependency("hull", ...).module("hull-protocol")`, std and strand only) frames JSON lines:
-`hello` (every setting: kind, range or values, default, value, hull's words, `available` and `reason`), `set`,
-`changed` (any change, whoever made it, availability included), `refused` (hull's words for why), `get`.
-hull's settings: `theme`, `background-opacity` (unavailable in full screen, value kept), `font-size`,
+hull-protocol frames JSON lines: `hello` (every setting: its kind, range or values, a toggle's two words, its
+default and value, hull's words, `available` and `reason`), `set`, `changed` (any change, whoever made it,
+availability included), `refused` (hull's words for why) and `get`. A program takes it as
+`b.dependency("hull", .{ .runner = false, ... }).module("hull-protocol")`: std and strand only, and none of
+hull's window is fetched.
+hull's settings: `theme`, `background_opacity` (unavailable in full screen, value kept), `font_size`,
 `padding`, `fullscreen`. Chosen values are kept in `~/Library/Application Support/<id>/hull-settings.json`.
 A theme change also reaches the program the standard way: new OSC 4/10/11 defaults and, under mode 2031,
 `CSI ? 997 ; 1|2 n`.
