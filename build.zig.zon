@@ -1,0 +1,17 @@
+.{
+    .name = .hull,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.17.0",
+    .fingerprint = 0xa0a3932049b1a5,
+    .paths = .{ "build.zig", "build.zig.zon", "src", "fonts", "libs", "tools", "apps", "README.md" },
+    .dependencies = .{
+        // libghostty-vt is not here: libs/build.zig.zon pins it, with raylib,, at the
+        // family's ghostty commit, for the Zig that commit builds with.
+        //
+        // shaping and rasterising: the family's, as lantern pins it
+        .ztypeset = .{
+            .url = "git+https://github.com/pedronaugusto/ztypeset?ref=v0.3.0#7a5255a8c9e1bf5d3dbe1ae0ac49582cd71b2284",
+            .hash = "ztypeset-0.3.0-6GHizmwQHQEHJiScVi07vNhTQ7xDpJxvo3rhJ8GhRZS7",
+        },
+    },
+}

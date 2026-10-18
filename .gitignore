@@ -1,0 +1,7 @@
+.zig-cache/
+zig-out/
+zig-pkg/
+libs/.zig-cache/
+libs/zig-out/
+libs/zig-pkg/
+.tools/
