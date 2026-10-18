@@ -11,8 +11,7 @@ is the terminal it runs in, owned by the app. What is built is marked so; the re
 - **The app owns everything; the player's terminal nothing.** Font, theme, opacity, padding and window policy come
   from the app's `hull.zon`, never a terminal configuration. *Protects:* an app that looks the same on every
   machine.
-- **hull never shows itself.** The window, the Dock, the menus and the process carry the app's name. *Protects:* an
-  app, not a terminal with a game in it.
+- **The bundle is the app's.** The window, the Dock, the menus and the process carry the app's name and icon.
 - **No app is named in hull.** An app's `hull.zon` and icon live in its own repository, and its build packages it
   through `addApp`. *Protects:* a general package, as the family's are.
 
@@ -49,9 +48,9 @@ is the terminal it runs in, owned by the app. What is built is marked so; the re
 
 - **macOS:** built. An `.app`, ad-hoc signed; a release signs and notarises.
 - **Linux:** the runner builds; an AppImage is to come.
-- **Windows:** hull is how a terminal program ships there, since no Ghostty app exists. The program runs on plain
-  pipes, never ConPTY, which rewrites the stream and drops sequences it does not know, kitty pictures among them;
-  its size travels over `hull-protocol`. Not built: the pty layer is POSIX alone, so hull's CI waits for this.
+- **Windows:** not built; the pty layer is POSIX alone, so hull's CI waits for it. The program will run on plain
+  pipes rather than ConPTY, which rewrites the stream and drops sequences it does not know (kitty pictures among
+  them), its size given over `hull-protocol`.
 
 ## Invariants
 
