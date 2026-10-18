@@ -12,6 +12,9 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.option(std.builtin.Optimize, "optimize", "debug · safe (default) · fast · small") orelse .safe;
+    const backend = b.option(Backend, "backend", "the window: sdl (SDL3, its renderer on Metal, Direct3D or Vulkan; the default) or raylib") orelse .sdl;
+    const options = b.addOptions();
+    options.addOption(Backend, "backend", backend);
 
     // libghostty-vt, ReleaseFast whatever hull is built as: Debug terminal
     // code is very slow, and its checks are ghostty's to run. HULL_VT_ZIG
@@ -38,6 +41,13 @@ pub fn build(b: *std.Build) void {
     rl_h.addIncludePath(vt_out.path(b, "include"));
 
     const zt = b.dependency("ztypeset", .{ .target = target, .optimize = optimize });
+    const sdl = b.dependency("sdl", .{ .target = target, .optimize = optimize });
+    const sdl_h = b.addTranslateC(.{
+        .root_source_file = b.path("src/c/sdl.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    sdl_h.addIncludePath(sdl.path("include"));
 
     // What a program inside hull imports to see hull's settings: std and
     // strand, nothing of the terminal or the window.
@@ -59,15 +69,22 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "vt", .module = vt_h.createModule() },
             .{ .name = "rl", .module = rl_h.createModule() },
+            .{ .name = "sdl", .module = sdl_h.createModule() },
             .{ .name = "hull-protocol", .module = protocol },
             .{ .name = "strand", .module = strand },
             .{ .name = "ztypeset", .module = zt.module("ztypeset") },
         },
     });
     mod.addObjectFile(vt_out.path(b, "lib/libghostty-vt-static.a"));
-    mod.addObjectFile(vt_out.path(b, "lib/libraylib.a"));
-    if (target.result.os.tag == .macos) {
-        for ([_][]const u8{ "OpenGL", "Cocoa", "IOKit", "CoreVideo", "CoreFoundation", "CoreGraphics" }) |f| mod.linkFramework(f, .{});
+    mod.addOptions("build_options", options);
+    switch (backend) {
+        .sdl => mod.linkLibrary(sdl.artifact("SDL3")),
+        .raylib => {
+            mod.addObjectFile(vt_out.path(b, "lib/libraylib.a"));
+            if (target.result.os.tag == .macos) {
+                for ([_][]const u8{ "OpenGL", "Cocoa", "IOKit", "CoreVideo", "CoreFoundation", "CoreGraphics" }) |f| mod.linkFramework(f, .{});
+            }
+        },
     }
     mod.addAnonymousImport("fonts", .{ .root_source_file = b.path("fonts/fonts.zig") });
     const exe = b.addExecutable(.{ .name = "hull", .root_module = mod });
@@ -93,3 +110,6 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(tests).step);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = protocol })).step);
 }
+
+/// What draws hull's window.
+const Backend = enum { sdl, raylib };

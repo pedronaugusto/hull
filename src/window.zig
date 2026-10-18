@@ -264,7 +264,7 @@ pub fn run(gpa: std.mem.Allocator, app: config.App, bytes: font.Fonts.Bytes, fal
     if (opts.bench) try report(gpa, &w, &s, t_main, t_window, opts.bench_out);
 }
 
-fn saveSnap(gpa: std.mem.Allocator, path: []const u8, px: []u32, w: u32, h: u32) void {
+pub fn saveSnap(gpa: std.mem.Allocator, path: []const u8, px: []u32, w: u32, h: u32) void {
     const png = @import("png.zig");
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
@@ -453,7 +453,7 @@ const Bench = struct {
     }
 };
 
-const RusageInfoV2 = extern struct {
+pub const RusageInfoV2 = extern struct {
     uuid: [16]u8,
     user_time: u64,
     system_time: u64,
@@ -468,11 +468,11 @@ const RusageInfoV2 = extern struct {
     rest: [32]u64,
 };
 extern "c" fn proc_pid_rusage(pid: c_int, flavor: c_int, buffer: *RusageInfoV2) c_int;
-extern "c" fn getpid() c_int;
-const Timebase = extern struct { numer: u32, denom: u32 };
-extern "c" fn mach_timebase_info(info: *Timebase) c_int;
+pub extern "c" fn getpid() c_int;
+pub const Timebase = extern struct { numer: u32, denom: u32 };
+pub extern "c" fn mach_timebase_info(info: *Timebase) c_int;
 
-fn usage(pid: c_int) ?RusageInfoV2 {
+pub fn usage(pid: c_int) ?RusageInfoV2 {
     if (builtin.os.tag != .macos) return null;
     var ri: RusageInfoV2 = undefined;
     if (proc_pid_rusage(pid, 2, &ri) != 0) return null;
@@ -535,7 +535,7 @@ fn unixMs(t: u64) i64 {
     return wall - @as(i64, @intCast((now() - t) / std.time.ns_per_ms));
 }
 
-fn stat(o: *std.Io.Writer, name: []const u8, xs: []u64) !void {
+pub fn stat(o: *std.Io.Writer, name: []const u8, xs: []u64) !void {
     if (xs.len == 0) return o.print("{s}: none\n", .{name});
     std.mem.sort(u64, xs, {}, std.sort.asc(u64));
     var sum: u64 = 0;

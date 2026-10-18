@@ -7,7 +7,7 @@
     .version = "0.0.0",
     .program = .{"wake"},
     // packaging: where the game is built, and its icon (a placeholder)
-    .program_source = "../../../../wake/wake/zig-out/bin/wake",
+    .program_source = "../../../wake/zig-out/bin/wake",
     .icon = "icon.png",
     .window = .{
         .cols = 100,

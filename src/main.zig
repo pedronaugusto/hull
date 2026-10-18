@@ -20,6 +20,11 @@ const config = @import("config.zig");
 const font = @import("font.zig");
 const Session = @import("session.zig").Session;
 const headless = @import("headless.zig");
+// the window, by the backend the build chose
+const window = switch (@import("build_options").backend) {
+    .sdl => @import("sdl/window.zig"),
+    .raylib => @import("window.zig"),
+};
 
 pub const std_options: std.Options = .{ .log_level = .info };
 
@@ -149,7 +154,7 @@ pub fn main(init: std.process.Init) !void {
         try headless.run(gpa, io, &s, .{ .out = o, .at = at, .also = also, .presses = keys, .fullscreen = fullscreen });
         return;
     }
-    try @import("window.zig").run(gpa, app, bytes, fallback.items, argv, init.environ_map, init.environ_map.get("HOME"), .{
+    try window.run(gpa, app, bytes, fallback.items, argv, init.environ_map, init.environ_map.get("HOME"), .{
         .bench = bench,
         .bench_out = init.environ_map.get("HULL_BENCH_OUT"),
         .snap = init.environ_map.get("HULL_SNAP"),

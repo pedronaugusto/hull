@@ -18,5 +18,9 @@
             .url = "git+https://github.com/pedronaugusto/ztypeset?ref=v0.3.0#7a5255a8c9e1bf5d3dbe1ae0ac49582cd71b2284",
             .hash = "ztypeset-0.3.0-6GHizmwQHQEHJiScVi07vNhTQ7xDpJxvo3rhJ8GhRZS7",
         },
+        .sdl = .{
+            .url = "git+https://github.com/castholm/SDL?ref=v0.6.0%2B3.4.18#dbcb19aa3583c318556ecae3ecbeb29b102d37c5",
+            .hash = "sdl-0.6.0+3.4.18-SDL--p-gqAGWpnfTLlhs0dgjDtc4P4_CHeNLGY_SX_Fv",
+        },
     },
 }
