@@ -44,12 +44,12 @@ pub const Vt = struct {
         try ok(c.ghostty_terminal_resize(v.term, cols, rows, cell_w, cell_h));
 
         _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_USERDATA, v);
-        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_WRITE_PTY, @ptrCast(&writePty));
-        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_SIZE, @ptrCast(&size));
-        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_XTVERSION, @ptrCast(&xtVersion));
-        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_DEVICE_ATTRIBUTES, @ptrCast(&deviceAttributes));
-        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_COLOR_SCHEME, @ptrCast(&colorScheme));
-        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_TITLE_CHANGED, @ptrCast(&titleChanged));
+        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_WRITE_PTY, @ptrCast(&writePty)); // safe: libghostty's out-parameter or option, of the type its header names
+        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_SIZE, @ptrCast(&size)); // safe: libghostty's out-parameter or option, of the type its header names
+        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_XTVERSION, @ptrCast(&xtVersion)); // safe: libghostty's out-parameter or option, of the type its header names
+        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_DEVICE_ATTRIBUTES, @ptrCast(&deviceAttributes)); // safe: libghostty's out-parameter or option, of the type its header names
+        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_COLOR_SCHEME, @ptrCast(&colorScheme)); // safe: libghostty's out-parameter or option, of the type its header names
+        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_TITLE_CHANGED, @ptrCast(&titleChanged)); // safe: libghostty's out-parameter or option, of the type its header names
 
         v.setColors(th);
 
@@ -151,7 +151,7 @@ pub const Vt = struct {
         c.ghostty_key_encoder_setopt(v.key_encoder, c.GHOSTTY_KEY_ENCODER_OPT_ALT_ESC_PREFIX, &esc);
         c.ghostty_key_encoder_setopt(v.key_encoder, c.GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT, &v.option_as_alt);
         const e = v.key_event;
-        c.ghostty_key_event_set_action(e, @intFromEnum(k.action));
+        c.ghostty_key_event_set_action(e, @backingInt(k.action));
         c.ghostty_key_event_set_key(e, k.key);
         c.ghostty_key_event_set_mods(e, k.mods);
         c.ghostty_key_event_set_consumed_mods(e, k.consumed);
@@ -177,7 +177,6 @@ pub const Vt = struct {
     fn reply(v: *Vt, bytes: []const u8) void {
         if (v.pty) |p| p.write(bytes);
     }
-
 };
 
 /// One key as the platform saw it, for `Vt.encodeKey`.
@@ -202,12 +201,12 @@ var png_installed = false;
 fn installPng() void {
     if (png_installed) return;
     png_installed = true;
-    _ = c.ghostty_sys_set(c.GHOSTTY_SYS_OPT_DECODE_PNG, @ptrCast(&decodePng));
+    _ = c.ghostty_sys_set(c.GHOSTTY_SYS_OPT_DECODE_PNG, @ptrCast(&decodePng)); // safe: libghostty's out-parameter or option, of the type its header names
 }
 
 fn decodePng(_: ?*anyopaque, allocator: [*c]const c.GhosttyAllocator, data: [*c]const u8, len: usize, out: [*c]c.GhosttySysImage) callconv(.c) bool {
     const gpa = std.heap.c_allocator;
-    const img = @import("pngdec.zig").decode(gpa, data[0..len]) catch return false;
+    const img = @import("pngdec.zig").decode(gpa, .init(data[0..len])) catch return false;
     defer gpa.free(img.rgba);
     const buf = c.ghostty_alloc(allocator, img.rgba.len);
     if (buf == null) return false;
@@ -225,7 +224,7 @@ pub fn rgb(x: theme_mod.Rgb) c.GhosttyColorRgb {
 }
 
 fn self(ud: ?*anyopaque) *Vt {
-    return @ptrCast(@alignCast(ud.?));
+    return @ptrCast(@alignCast(ud.?)); // safe: the userdata init set to this Vt
 }
 
 fn writePty(_: c.GhosttyTerminal, ud: ?*anyopaque, data: [*c]const u8, len: usize) callconv(.c) void {
@@ -265,4 +264,3 @@ fn colorScheme(_: c.GhosttyTerminal, ud: ?*anyopaque, out: [*c]c.GhosttyColorSch
 fn titleChanged(_: c.GhosttyTerminal, ud: ?*anyopaque) callconv(.c) void {
     self(ud).title_changed = true;
 }
-

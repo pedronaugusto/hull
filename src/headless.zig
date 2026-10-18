@@ -95,7 +95,7 @@ fn secs(start: u64) f64 {
 
 fn numbered(gpa: std.mem.Allocator, out: []const u8, n: usize) ![]const u8 {
     const ext = std.fs.path.extension(out);
-    return std.fmt.allocPrint(gpa, "{s}-{d}{s}", .{ out[0 .. out.len - ext.len], n, ext });
+    return gpa.print("{s}-{d}{s}", .{ out[0 .. out.len - ext.len], n, ext });
 }
 
 fn save(gpa: std.mem.Allocator, io: std.Io, cv: Canvas, path: []const u8) !void {
@@ -112,7 +112,7 @@ pub fn parsePresses(gpa: std.mem.Allocator, spec: []const u8) ![]Press {
     var out: std.ArrayList(Press) = .empty;
     var it = std.mem.tokenizeScalar(u8, spec, ',');
     while (it.next()) |item| {
-        const colon = std.mem.indexOfScalar(u8, item, ':') orelse return error.BadKeys;
+        const colon = std.mem.findScalar(u8, item, ':') orelse return error.BadKeys;
         const at = try std.fmt.parseFloat(f64, item[0..colon]);
         const k = named(item[colon + 1 ..]) orelse return error.BadKeys;
         try out.append(gpa, .{ .at = at, .key = k });
@@ -168,4 +168,17 @@ fn plain(name: []const u8) ?vt_mod.Key {
     if (name.len == 1 and name[0] >= 'a' and name[0] <= 'z')
         return .{ .action = .press, .key = @intCast(c.GHOSTTY_KEY_A + @as(c_int, name[0] - 'a')), .text = name, .unshifted = name[0] };
     return null;
+}
+
+test "any keys spec parses or is refused, never crashes" {
+    try std.testing.fuzz({}, struct {
+        fn one(_: void, smith: *std.testing.Smith) anyerror!void {
+            var input: [512]u8 = undefined;
+            const seed = "1.5:enter,3:ctrl+c,4:right";
+            @memcpy(input[0..seed.len], seed);
+            const n = smith.sliceWithHash(input[seed.len..], 0);
+            const presses = parsePresses(std.testing.allocator, input[0 .. seed.len + n]) catch return;
+            std.testing.allocator.free(presses);
+        }
+    }.one, .{});
 }

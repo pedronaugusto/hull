@@ -133,7 +133,7 @@ pub const Settings = struct {
     pub fn describe(st: *Settings, a: std.mem.Allocator) ![]hp.Setting {
         const num = struct {
             fn f(al: std.mem.Allocator, v: f64) hp.Value {
-                return .{ .number = std.fmt.allocPrint(al, "{d}", .{v}) catch "0" };
+                return .{ .number = al.print("{d}", .{v}) catch "0" };
             }
         }.f;
         const out = try a.alloc(hp.Setting, 5);

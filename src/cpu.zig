@@ -56,7 +56,7 @@ pub const Cpu = struct {
     };
 
     fn self(ptr: *anyopaque) *Cpu {
-        return @ptrCast(@alignCast(ptr));
+        return @ptrCast(@alignCast(ptr)); // safe: the backend's own pointer, made by `backend`
     }
 
     fn begin(ptr: *anyopaque, w: u32, h: u32, ground: Color) void {

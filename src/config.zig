@@ -10,14 +10,9 @@ pub const App = struct {
     /// Reverse-DNS bundle identifier.
     id: []const u8 = "dev.hull.app",
     version: []const u8 = "0.0.0",
-    /// The program and its arguments. A relative path is the bundle's
-    /// own (Contents/MacOS), so an app ships its program inside it.
+    /// The program and its arguments. In an app, a bare name is the program
+    /// its build bundled, and none at all runs that program alone.
     program: []const []const u8 = &.{},
-    /// The icon, a square PNG beside hull.zon; packaging only.
-    icon: ?[]const u8 = null,
-    /// Where packaging finds the program to put inside the bundle,
-    /// relative to hull.zon; packaging only.
-    program_source: ?[]const u8 = null,
     window: Window = .{},
     terminal: Terminal = .{},
 };
@@ -147,4 +142,19 @@ test "parse an app" {
     try std.testing.expectEqual(@as(f32, 16), app.terminal.font_size);
     try std.testing.expectEqual(@as(u8, 80), app.terminal.background_opacity);
     try std.testing.expect(!app.window.tabs);
+}
+
+test "any hull.zon parses or is refused, never crashes" {
+    try std.testing.fuzz({}, struct {
+        fn one(_: void, smith: *std.testing.Smith) anyerror!void {
+            var input: [2048:0]u8 = undefined;
+            const seed = ".{ .name = \"WAKE\", .window = .{ .cols = 100 }, .terminal = .{ .theme = \"rose-pine\" } }";
+            @memcpy(input[0..seed.len], seed);
+            const n = smith.sliceWithHash(input[seed.len..], 0);
+            input[seed.len + n] = 0;
+            var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+            defer arena.deinit();
+            _ = parse(std.testing.allocator, arena.allocator(), input[0 .. seed.len + n :0]) catch return;
+        }
+    }.one, .{});
 }

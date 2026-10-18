@@ -3,11 +3,13 @@
     .version = "0.0.0",
     .minimum_zig_version = "0.17.0",
     .fingerprint = 0xa0a3932049b1a5,
-    .paths = .{ "build.zig", "build.zig.zon", "src", "protocol", "fonts", "libs", "tools", "apps", "README.md" },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "protocol", "fonts", "tools", "docs", "README.md", "LICENSE" },
     .dependencies = .{
-        // libghostty-vt is not here: libs/build.zig.zon pins it, with raylib,, at the
-        // family's ghostty commit, for the Zig that commit builds with.
-        //
+        // safety by construction: the program's bytes taken as untrusted, sizes checked
+        .aegis = .{
+            .url = "git+https://github.com/pedronaugusto/aegis?ref=v0.1.14#5852ab956e97a47926af73abbb7dced5361f9267",
+            .hash = "aegis-0.1.14-rsxouiwFCACpt6FVOECFUhpjUaetlNneWpaDTj95q514",
+        },
         // the protocol's lines, typed JSON
         .strand = .{
             .url = "git+https://github.com/pedronaugusto/strand?ref=v0.13.0#2e5339055003178387222ec2fbb674b95c5432de",
@@ -21,6 +23,21 @@
         .sdl = .{
             .url = "git+https://github.com/castholm/SDL?ref=v0.6.0%2B3.4.18#dbcb19aa3583c318556ecae3ecbeb29b102d37c5",
             .hash = "sdl-0.6.0+3.4.18-SDL--p-gqAGWpnfTLlhs0dgjDtc4P4_CHeNLGY_SX_Fv",
+        },
+        // libghostty-vt: Ghostty's zig-0.17 branch, as the family's packages take it until its port merges
+        .ghostty = .{
+            .url = "https://github.com/ghostty-org/ghostty/archive/5147c0a503cdeed7615cce245cdd815ed7a6b692.tar.gz",
+            .hash = "ghostty-1.3.2-dev-5UdBC-lZeAVJbemF7Fz8y5ApP0uA6wTc2uzECn3c6Z_Y",
+        },
+    },
+    .dev_dependencies = .{
+        .preflight = .{
+            .url = "git+https://github.com/pedronaugusto/preflight?ref=v0.5.6#7d5f97b670c7f777392f180187dbf079efc59910",
+            .hash = "preflight-0.5.6-LX1ZwlDqDwBqvy5JbO7G7U-lhZRhdEJLquePX7jFF2Ht",
+        },
+        .shakedown = .{
+            .url = "git+https://github.com/pedronaugusto/shakedown?ref=v0.4.2#93217f8d5c29d3f72b94da9cf961df321bba8430",
+            .hash = "shakedown-0.4.2-BR8U4-oKFgD-vju9MmZmggQ2e43dhqBS6KhKONWGXV62",
         },
     },
 }

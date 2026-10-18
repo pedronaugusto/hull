@@ -26,9 +26,9 @@ pub fn now() u64 {
 
 /// Variables that would tell the program it runs in another terminal.
 const foreign = [_][]const u8{
-    "TMUX",          "TMUX_PANE",          "STY",            "TERM_SESSION_ID", "VTE_VERSION", "WT_SESSION",
-    "LC_TERMINAL",   "LC_TERMINAL_VERSION", "INSIDE_EMACS",   "TERMINFO",        "TERM_PROGRAM", "TERM_PROGRAM_VERSION",
-    "COLORTERM",     "TERM",
+    "TMUX",        "TMUX_PANE",           "STY",          "TERM_SESSION_ID", "VTE_VERSION",  "WT_SESSION",
+    "LC_TERMINAL", "LC_TERMINAL_VERSION", "INSIDE_EMACS", "TERMINFO",        "TERM_PROGRAM", "TERM_PROGRAM_VERSION",
+    "COLORTERM",   "TERM",
 };
 const foreign_prefixes = [_][]const u8{ "KITTY_", "GHOSTTY_", "ITERM_", "WEZTERM_", "ALACRITTY_", "KONSOLE_", "HULL_" };
 
@@ -113,7 +113,7 @@ pub const Session = struct {
         outer: while (it.next()) |e| {
             for (foreign) |k| if (std.mem.eql(u8, e.key_ptr.*, k)) continue :outer;
             for (foreign_prefixes) |p| if (std.mem.startsWith(u8, e.key_ptr.*, p)) continue :outer;
-            try env.append(a, try std.fmt.allocPrint(a, "{s}={s}", .{ e.key_ptr.*, e.value_ptr.* }));
+            try env.append(a, try a.print("{s}={s}", .{ e.key_ptr.*, e.value_ptr.* }));
         }
         // What the program may know: that it runs in hull, as which app, and
         // the settings hull owns that a program may offer its player.
@@ -125,8 +125,8 @@ pub const Session = struct {
             "TERM_PROGRAM_VERSION=" ++ vt_mod.version,
             std.fmt.comptimePrint("HULL_SOCKET=fd:{d}", .{@import("pty.zig").channel_fd}),
             "HULL=" ++ vt_mod.version,
-            try std.fmt.allocPrint(a, "HULL_APP={s}", .{s.app.id}),
-            try std.fmt.allocPrint(a, "HULL_THEME={s}", .{t.theme}),
+            try a.print("HULL_APP={s}", .{s.app.id}),
+            try a.print("HULL_THEME={s}", .{t.theme}),
         });
         if (parent_env.get("LANG") == null) try env.append(a, "LANG=en_US.UTF-8");
         const ch = try @import("pty.zig").channel();

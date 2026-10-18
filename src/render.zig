@@ -77,6 +77,18 @@ pub const Stats = struct {
     glyphs: u32 = 0,
 };
 
+/// What one frame's passes share: the terminal, the faces, where the grid sits, and its colours and cursor.
+const Pass = struct {
+    v: *Vt,
+    f: *font.Fonts,
+    lay: Layout,
+    colors: c.GhosttyRenderStateColors,
+    cursor: c.GhosttyRenderStateCursor,
+    /// The cursor is a block, drawn as the cell's own colours swapped.
+    block: bool,
+    cursor_color: Color,
+};
+
 const Slot = struct { x: u16, y: u16, w: u16, h: u16, left: i16, top: i16, missing: bool = false };
 const Image = struct { seen: u64, generation: u64 };
 
@@ -130,7 +142,7 @@ pub const Renderer = struct {
         b.vtable.begin(b.ptr, w, h, ground);
 
         var kitty: c.GhosttyKittyGraphics = null;
-        const has_kitty = c.ghostty_terminal_get(v.term, c.GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS, @ptrCast(&kitty)) == c.GHOSTTY_SUCCESS and kitty != null;
+        const has_kitty = c.ghostty_terminal_get(v.term, c.GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS, @ptrCast(&kitty)) == c.GHOSTTY_SUCCESS and kitty != null; // safe: libghostty's out-parameter or option, of the type its header names
         if (has_kitty) r.pictures(v, kitty, lay, c.GHOSTTY_KITTY_PLACEMENT_LAYER_BELOW_BG, &stats);
 
         var cursor = std.mem.zeroes(c.GhosttyRenderStateCursor);
@@ -140,15 +152,39 @@ pub const Renderer = struct {
         const block = cursor_on and cursor.visual_style == c.GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK;
         const cursor_color = Color.of(if (colors.cursor_has_value) colors.cursor else colors.foreground);
 
-        // Cell backgrounds, a run of one colour as one rectangle. A cell the
-        // program set to the background colour itself is the background,
-        // and as translucent.
+        const pass: Pass = .{ .v = v, .f = f, .lay = lay, .colors = colors, .cursor = cursor, .block = block, .cursor_color = cursor_color };
+        r.backgrounds(pass, &stats);
+
+        if (has_kitty) r.pictures(v, kitty, lay, c.GHOSTTY_KITTY_PLACEMENT_LAYER_BELOW_TEXT, &stats);
+
+        r.text(pass, &stats);
+
+        if (cursor_on and !block) r.cursorShape(pass, &stats);
+
+        if (has_kitty) r.pictures(v, kitty, lay, c.GHOSTTY_KITTY_PLACEMENT_LAYER_ABOVE_TEXT, &stats);
+
+        var clean_state: c.GhosttyRenderStateDirty = c.GHOSTTY_RENDER_STATE_DIRTY_FALSE;
+        _ = c.ghostty_render_state_set(v.render, c.GHOSTTY_RENDER_STATE_OPTION_DIRTY, &clean_state);
+
+        r.forget();
+        b.vtable.present(b.ptr);
+        return stats;
+    }
+
+    // Cell backgrounds, a run of one colour as one rectangle. A cell the program set to the background colour
+    // itself is the background, and as translucent.
+    fn backgrounds(r: *Renderer, p: Pass, stats: *Stats) void {
+        const v = p.v;
+        const lay = p.lay;
+        const colors = p.colors;
+        const bg = colors.background;
+        const cursor = p.cursor;
         var it = v.rows_it;
-        _ = c.ghostty_render_state_get(v.render, c.GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR, @ptrCast(&it));
+        _ = c.ghostty_render_state_get(v.render, c.GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR, @ptrCast(&it)); // safe: libghostty's out-parameter or option, of the type its header names
         var row: u16 = 0;
         while (c.ghostty_render_state_row_iterator_next(it)) : (row += 1) {
             var cells = v.cells;
-            if (c.ghostty_render_state_row_get(it, c.GHOSTTY_RENDER_STATE_ROW_DATA_CELLS, @ptrCast(&cells)) != c.GHOSTTY_SUCCESS) continue;
+            if (c.ghostty_render_state_row_get(it, c.GHOSTTY_RENDER_STATE_ROW_DATA_CELLS, @ptrCast(&cells)) != c.GHOSTTY_SUCCESS) continue; // safe: libghostty's out-parameter or option, of the type its header names
             const y: i32 = @intCast(lay.pad_y + @as(u32, row) * lay.cell_h);
             var run_start: u16 = 0;
             var run_color: ?Color = null;
@@ -163,24 +199,31 @@ pub const Renderer = struct {
                     has_bg = true;
                 }
                 var this: ?Color = if (has_bg and !(cbg.r == bg.r and cbg.g == bg.g and cbg.b == bg.b)) Color.of(cbg) else null;
-                if (block and cursor.viewport_x == col and cursor.viewport_y == row) this = cursor_color;
+                if (p.block and cursor.viewport_x == col and cursor.viewport_y == row) this = p.cursor_color;
                 if (!std.meta.eql(this, run_color)) {
-                    if (run_color) |rc| r.rectCells(lay, run_start, col, y, rc, &stats);
+                    if (run_color) |rc| r.rectCells(lay, run_start, col, y, rc, stats);
                     run_color = this;
                     run_start = col;
                 }
             }
-            if (run_color) |rc| r.rectCells(lay, run_start, col, y, rc, &stats);
+            if (run_color) |rc| r.rectCells(lay, run_start, col, y, rc, stats);
         }
+    }
 
-        if (has_kitty) r.pictures(v, kitty, lay, c.GHOSTTY_KITTY_PLACEMENT_LAYER_BELOW_TEXT, &stats);
-
-        // Text and its lines.
-        _ = c.ghostty_render_state_get(v.render, c.GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR, @ptrCast(&it));
-        row = 0;
+    // The text and its lines, and each row marked drawn.
+    fn text(r: *Renderer, p: Pass, stats: *Stats) void {
+        const v = p.v;
+        const f = p.f;
+        const lay = p.lay;
+        const colors = p.colors;
+        const bg = colors.background;
+        const cursor = p.cursor;
+        var it = v.rows_it;
+        _ = c.ghostty_render_state_get(v.render, c.GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR, @ptrCast(&it)); // safe: libghostty's out-parameter or option, of the type its header names
+        var row: u16 = 0;
         while (c.ghostty_render_state_row_iterator_next(it)) : (row += 1) {
             var cells = v.cells;
-            if (c.ghostty_render_state_row_get(it, c.GHOSTTY_RENDER_STATE_ROW_DATA_CELLS, @ptrCast(&cells)) != c.GHOSTTY_SUCCESS) continue;
+            if (c.ghostty_render_state_row_get(it, c.GHOSTTY_RENDER_STATE_ROW_DATA_CELLS, @ptrCast(&cells)) != c.GHOSTTY_SUCCESS) continue; // safe: libghostty's out-parameter or option, of the type its header names
             const y: i32 = @intCast(lay.pad_y + @as(u32, row) * lay.cell_h);
             var col: u16 = 0;
             while (c.ghostty_render_state_row_cells_next(cells)) : (col += 1) {
@@ -195,7 +238,7 @@ pub const Renderer = struct {
                     fg = bg;
                     _ = c.ghostty_render_state_row_cells_get(cells, c.GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR, &fg);
                 }
-                if (block and cursor.viewport_x == col and cursor.viewport_y == row) fg = bg;
+                if (p.block and cursor.viewport_x == col and cursor.viewport_y == row) fg = bg;
                 var color = Color.of(fg);
                 if (style.faint) color.a = 128;
                 const x: i32 = @intCast(lay.pad_x + @as(u32, col) * lay.cell_w);
@@ -204,42 +247,43 @@ pub const Renderer = struct {
                     _ = c.ghostty_render_state_row_cells_get(cells, c.GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF, &cps);
                     const cp: u21 = @intCast(@min(cps[0], 0x10FFFF));
                     const st: font.Style = if (style.bold and style.italic) .bold_italic else if (style.bold) .bold else if (style.italic) .italic else .regular;
-                    if (!r.special(cp, x, y, lay, color, &stats)) r.glyph(f, cp, st, x, y + f.baseline, color, &stats);
+                    if (!r.special(cp, x, y, lay, color, stats)) r.glyph(f, cp, st, x, y + f.baseline, color, stats);
                 }
                 const t = f.underline_thick;
-                if (style.underline != 0) r.rect(.{ .x = x, .y = y + f.underline_pos, .w = lay.cell_w, .h = t }, color, &stats);
-                if (style.strikethrough) r.rect(.{ .x = x, .y = y + @divTrunc(f.baseline * 2, 3), .w = lay.cell_w, .h = t }, color, &stats);
-                if (style.overline) r.rect(.{ .x = x, .y = y, .w = lay.cell_w, .h = t }, color, &stats);
+                if (style.underline != 0) r.rect(.{ .x = x, .y = y + f.underline_pos, .w = lay.cell_w, .h = t }, color, stats);
+                if (style.strikethrough) r.rect(.{ .x = x, .y = y + @divTrunc(f.baseline * 2, 3), .w = lay.cell_w, .h = t }, color, stats);
+                if (style.overline) r.rect(.{ .x = x, .y = y, .w = lay.cell_w, .h = t }, color, stats);
             }
             var clean = false;
             _ = c.ghostty_render_state_row_set(it, c.GHOSTTY_RENDER_STATE_ROW_OPTION_DIRTY, &clean);
         }
+    }
 
-        if (cursor_on and !block) {
-            const cx: i32 = @intCast(lay.pad_x + @as(u32, cursor.viewport_x) * lay.cell_w);
-            const cy: i32 = @intCast(lay.pad_y + @as(u32, cursor.viewport_y) * lay.cell_h);
-            const t: u32 = @intFromFloat(@max(1, @round(lay.scale * 1.5)));
-            const ti: i32 = @intCast(t);
-            const cw: i32 = @intCast(lay.cell_w);
-            const ch: i32 = @intCast(lay.cell_h);
-            switch (cursor.visual_style) {
-                c.GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR => r.rect(.{ .x = cx, .y = cy, .w = t, .h = lay.cell_h }, cursor_color, &stats),
-                c.GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE => r.rect(.{ .x = cx, .y = cy + ch - ti, .w = lay.cell_w, .h = t }, cursor_color, &stats),
-                else => {
-                    r.rect(.{ .x = cx, .y = cy, .w = lay.cell_w, .h = t }, cursor_color, &stats);
-                    r.rect(.{ .x = cx, .y = cy + ch - ti, .w = lay.cell_w, .h = t }, cursor_color, &stats);
-                    r.rect(.{ .x = cx, .y = cy, .w = t, .h = lay.cell_h }, cursor_color, &stats);
-                    r.rect(.{ .x = cx + cw - ti, .y = cy, .w = t, .h = lay.cell_h }, cursor_color, &stats);
-                },
-            }
+    // A cursor that is not a block: a bar, an underline or a hollow box.
+    fn cursorShape(r: *Renderer, p: Pass, stats: *Stats) void {
+        const lay = p.lay;
+        const cursor = p.cursor;
+        const cursor_color = p.cursor_color;
+        const cx: i32 = @intCast(lay.pad_x + @as(u32, cursor.viewport_x) * lay.cell_w);
+        const cy: i32 = @intCast(lay.pad_y + @as(u32, cursor.viewport_y) * lay.cell_h);
+        const t: u32 = @intFromFloat(@max(1, @round(lay.scale * 1.5)));
+        const ti: i32 = @intCast(t);
+        const cw: i32 = @intCast(lay.cell_w);
+        const ch: i32 = @intCast(lay.cell_h);
+        switch (cursor.visual_style) {
+            c.GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR => r.rect(.{ .x = cx, .y = cy, .w = t, .h = lay.cell_h }, cursor_color, stats),
+            c.GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE => r.rect(.{ .x = cx, .y = cy + ch - ti, .w = lay.cell_w, .h = t }, cursor_color, stats),
+            else => {
+                r.rect(.{ .x = cx, .y = cy, .w = lay.cell_w, .h = t }, cursor_color, stats);
+                r.rect(.{ .x = cx, .y = cy + ch - ti, .w = lay.cell_w, .h = t }, cursor_color, stats);
+                r.rect(.{ .x = cx, .y = cy, .w = t, .h = lay.cell_h }, cursor_color, stats);
+                r.rect(.{ .x = cx + cw - ti, .y = cy, .w = t, .h = lay.cell_h }, cursor_color, stats);
+            },
         }
+    }
 
-        if (has_kitty) r.pictures(v, kitty, lay, c.GHOSTTY_KITTY_PLACEMENT_LAYER_ABOVE_TEXT, &stats);
-
-        var clean_state: c.GhosttyRenderStateDirty = c.GHOSTTY_RENDER_STATE_DIRTY_FALSE;
-        _ = c.ghostty_render_state_set(v.render, c.GHOSTTY_RENDER_STATE_OPTION_DIRTY, &clean_state);
-
-        // Images not drawn for a while are let go.
+    // Images not drawn for a while are let go.
+    fn forget(r: *Renderer) void {
         var drop: [16]u64 = undefined;
         var nd: usize = 0;
         var ii = r.images.iterator();
@@ -249,10 +293,8 @@ pub const Renderer = struct {
         };
         for (drop[0..nd]) |k| {
             _ = r.images.remove(k);
-            b.vtable.drop(b.ptr, k);
+            r.backend.vtable.drop(r.backend.ptr, k);
         }
-        b.vtable.present(b.ptr);
-        return stats;
     }
 
     fn rect(r: *Renderer, rc: Rect, color: Color, stats: *Stats) void {
@@ -277,10 +319,11 @@ pub const Renderer = struct {
     /// The glyph's place in the atlas, rasterised and uploaded the first
     /// time; a full atlas starts over.
     fn slot(r: *Renderer, f: *font.Fonts, cp: u21, st: font.Style, stats: *Stats) ?Slot {
-        const key = (@as(u64, @intFromEnum(st)) << 32) | cp;
+        const key = (@as(u64, @backingInt(st)) << 32) | cp;
         if (r.glyphs.get(key)) |s| return s;
         const bm = f.raster(cp, st) orelse {
-            r.glyphs.put(r.gpa, key, .{ .x = 0, .y = 0, .w = 0, .h = 0, .left = 0, .top = 0, .missing = true }) catch {};
+            // a missing glyph not remembered is only looked for again
+            r.glyphs.put(r.gpa, key, .{ .x = 0, .y = 0, .w = 0, .h = 0, .left = 0, .top = 0, .missing = true }) catch return null;
             return null;
         };
         if (bm.w + 1 > atlas_size or bm.h + 1 > atlas_size) return null;
@@ -351,7 +394,7 @@ pub const Renderer = struct {
         var l = layer;
         _ = c.ghostty_kitty_graphics_placement_iterator_set(v.placements, c.GHOSTTY_KITTY_GRAPHICS_PLACEMENT_ITERATOR_OPTION_LAYER, &l);
         var it = v.placements;
-        if (c.ghostty_kitty_graphics_get(kitty, c.GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR, @ptrCast(&it)) != c.GHOSTTY_SUCCESS) return;
+        if (c.ghostty_kitty_graphics_get(kitty, c.GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR, @ptrCast(&it)) != c.GHOSTTY_SUCCESS) return; // safe: libghostty's out-parameter or option, of the type its header names
         while (c.ghostty_kitty_graphics_placement_next(it)) {
             var id: u32 = 0;
             _ = c.ghostty_kitty_graphics_placement_get(it, c.GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_IMAGE_ID, &id);
@@ -395,7 +438,7 @@ pub const Renderer = struct {
         _ = c.ghostty_kitty_graphics_image_get(img, c.GHOSTTY_KITTY_IMAGE_DATA_WIDTH, &iw);
         _ = c.ghostty_kitty_graphics_image_get(img, c.GHOSTTY_KITTY_IMAGE_DATA_HEIGHT, &ih);
         _ = c.ghostty_kitty_graphics_image_get(img, c.GHOSTTY_KITTY_IMAGE_DATA_FORMAT, &fmt);
-        _ = c.ghostty_kitty_graphics_image_get(img, c.GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR, @ptrCast(&data));
+        _ = c.ghostty_kitty_graphics_image_get(img, c.GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR, @ptrCast(&data)); // safe: libghostty's out-parameter or option, of the type its header names
         _ = c.ghostty_kitty_graphics_image_get(img, c.GHOSTTY_KITTY_IMAGE_DATA_DATA_LEN, &len);
         const bpp: usize = switch (fmt) {
             c.GHOSTTY_KITTY_IMAGE_FORMAT_RGBA => 4,

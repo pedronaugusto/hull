@@ -1,0 +1,7 @@
+// An app as its own repository would carry it: who it is, its window and its terminal.
+.{
+    .name = "Hello",
+    .id = "dev.hull.hello",
+    .version = "0.1.0",
+    .window = .{ .cols = 60, .rows = 12 },
+}

@@ -12,19 +12,12 @@
 //!     --scale N          headless device pixels per point (default 2)
 //!     --size COLSxROWS   the grid (the app's otherwise)
 //!     --fullscreen       headless: as if full screen (opaque; opacity unavailable)
-//!     --bench            window: press keys itself and report latency,
-//!                        frame time, memory and startup on exit
 const std = @import("std");
-const builtin = @import("builtin");
 const config = @import("config.zig");
 const font = @import("font.zig");
 const Session = @import("session.zig").Session;
 const headless = @import("headless.zig");
-// the window, by the backend the build chose
-const window = switch (@import("build_options").backend) {
-    .sdl => @import("sdl/window.zig"),
-    .raylib => @import("window.zig"),
-};
+const window = @import("window.zig");
 
 pub const std_options: std.Options = .{ .log_level = .info };
 
@@ -44,10 +37,8 @@ pub fn main(init: std.process.Init) !void {
     var scale: f32 = 2;
     var size: ?[2]u16 = null;
     var theme_name: ?[]const u8 = null;
-    var bench = false;
     var opacity: ?i64 = null;
     var fullscreen = false;
-    var describe = false;
     var program: std.ArrayList([]const u8) = .empty;
     while (args.next()) |a| {
         if (std.mem.eql(u8, a, "--")) {
@@ -70,7 +61,7 @@ pub fn main(init: std.process.Init) !void {
             scale = try std.fmt.parseFloat(f32, args.next() orelse return usage());
         } else if (std.mem.eql(u8, a, "--size")) {
             const v = args.next() orelse return usage();
-            const x = std.mem.indexOfScalar(u8, v, 'x') orelse return usage();
+            const x = std.mem.findScalar(u8, v, 'x') orelse return usage();
             size = .{ try std.fmt.parseInt(u16, v[0..x], 10), try std.fmt.parseInt(u16, v[x + 1 ..], 10) };
         } else if (std.mem.eql(u8, a, "--theme")) {
             theme_name = try arena.dupe(u8, args.next() orelse return usage());
@@ -78,10 +69,6 @@ pub fn main(init: std.process.Init) !void {
             opacity = try std.fmt.parseInt(i64, args.next() orelse return usage(), 10);
         } else if (std.mem.eql(u8, a, "--fullscreen")) {
             fullscreen = true;
-        } else if (std.mem.eql(u8, a, "--bench")) {
-            bench = true;
-        } else if (std.mem.eql(u8, a, "--describe")) {
-            describe = true;
         } else return usage();
     }
 
@@ -102,20 +89,10 @@ pub fn main(init: std.process.Init) !void {
         app.window.rows = sz[1];
     }
     if (program.items.len > 0) app.program = program.items;
-    if (describe) {
-        // For tools/bundle.sh: who the app is, as shell assignments.
-        var buf: [4096]u8 = undefined;
-        var w = std.Io.File.stdout().writer(io, &buf);
-        const o = &w.interface;
-        try o.print("NAME='{s}'\nID='{s}'\nVERSION='{s}'\n", .{ app.name, app.id, app.version });
-        if (app.program.len > 0) try o.print("PROGRAM='{s}'\n", .{std.fs.path.basename(app.program[0])});
-        if (dir) |d| {
-            if (app.program_source) |p| try o.print("PROGRAM_SOURCE='{s}'\n", .{try std.fs.path.resolve(arena, &.{ d, p })});
-            if (app.icon) |p| try o.print("ICON='{s}'\n", .{try std.fs.path.resolve(arena, &.{ d, p })});
-        }
-        try o.flush();
-        return;
-    }
+    // an app with no program named runs the one its build bundled
+    if (app.program.len == 0 and dir != null) if (try bundledProgram(io, arena, bundled)) |p| {
+        app.program = try arena.dupe([]const u8, &.{p});
+    };
     if (app.program.len == 0) {
         std.log.err("no program: give one after --, or an app whose hull.zon names it", .{});
         return error.NoProgram;
@@ -123,20 +100,18 @@ pub fn main(init: std.process.Init) !void {
     // A bare program name is the bundle's (Contents/Resources/program),
     // or beside hull, or in the app's directory.
     var argv = try arena.dupe([]const u8, app.program);
-    if (!std.fs.path.isAbsolute(argv[0]) and std.mem.indexOfScalar(u8, argv[0], '/') == null) {
+    if (!std.fs.path.isAbsolute(argv[0]) and std.mem.findScalar(u8, argv[0], '/') == null) {
         const places = [_][]const u8{
             try std.fs.path.join(arena, &.{ bundled, "program", argv[0] }),
             try std.fs.path.join(arena, &.{ exe_dir, argv[0] }),
             if (dir) |d| try std.fs.path.join(arena, &.{ d, argv[0] }) else "",
-            // unpackaged, from the app's directory: where packaging takes it from
-            if (dir != null and app.program_source != null) try std.fs.path.resolve(arena, &.{ dir.?, app.program_source.? }) else "",
         };
         for (places) |p| if (p.len > 0 and exists(io, p)) {
-            argv[0] = try std.fs.path.resolve(arena, &.{ try std.process.currentPathAlloc(io, arena), p });
+            argv[0] = try std.fs.path.resolveAlloc(arena, &.{ try std.process.currentPathAlloc(io, arena), p });
             break;
         };
     } else if (!std.fs.path.isAbsolute(argv[0])) {
-        argv[0] = try std.fs.path.resolve(arena, &.{ try std.process.currentPathAlloc(io, arena), argv[0] });
+        argv[0] = try std.fs.path.resolveAlloc(arena, &.{ try std.process.currentPathAlloc(io, arena), argv[0] });
     }
     const bytes = try fontBytes(io, arena, dir, app.terminal);
     var fallback: std.ArrayList([]const u8) = .empty;
@@ -155,8 +130,6 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
     try window.run(gpa, app, bytes, fallback.items, argv, init.environ_map, init.environ_map.get("HOME"), .{
-        .bench = bench,
-        .bench_out = init.environ_map.get("HULL_BENCH_OUT"),
         .snap = init.environ_map.get("HULL_SNAP"),
         .io = io,
     });
@@ -175,6 +148,15 @@ fn fontBytes(io: std.Io, arena: std.mem.Allocator, dir: ?[]const u8, t: config.T
         x.* = b[0];
     };
     return b;
+}
+
+// The program in an app's Resources/program, if there is one.
+fn bundledProgram(io: std.Io, arena: std.mem.Allocator, resources: []const u8) !?[]const u8 {
+    var dir = std.Io.Dir.cwd().openDir(io, try std.fs.path.join(arena, &.{ resources, "program" }), .{ .iterate = true }) catch return null;
+    defer dir.close(io);
+    var it = dir.iterate();
+    const entry = (try it.next(io)) orelse return null;
+    return try std.fs.path.join(arena, &.{ resources, "program", entry.name });
 }
 
 fn exists(io: std.Io, path: []const u8) bool {
@@ -197,4 +179,5 @@ test {
     _ = @import("keys.zig");
     _ = @import("pngdec.zig");
     _ = @import("settings.zig");
+    _ = @import("headless.zig");
 }

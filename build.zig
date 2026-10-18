@@ -1,56 +1,19 @@
 const std = @import("std");
 
-/// hull: a terminal program of the family in a window of its own.
+/// hull: a terminal program in a native window of its own, shipped as an
+/// app. What a program's build takes from it:
 ///
-///     zig build                      hull, the runner (window or headless)
-///     zig build app -Dapp=apps/wake  the .app for an app's hull.zon
-///     zig build test                 the units
+/// - `addApp(b, hull, .{ .program, .config, .icon })`: the program as an app,
+///   its runner built for the program's target and the bundle made for it.
+/// - the `hull-protocol` module: what a program inside hull imports to see
+///   hull's settings, std and strand alone.
 ///
-/// libghostty-vt and raylib come from libs/, a build of their own with the Zig
-/// their pins need (0.16.0, fetched by tools/zig16.sh), as C static
-/// libraries: hull reaches both through their C APIs alone.
+/// The runner (`hull`, a window or headless) and the bundler are built here;
+/// the tests and the gate are `dev`'s.
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.option(std.builtin.Optimize, "optimize", "debug · safe (default) · fast · small") orelse .safe;
-    const backend = b.option(Backend, "backend", "the window: sdl (SDL3, its renderer on Metal, Direct3D or Vulkan; the default) or raylib") orelse .sdl;
-    const options = b.addOptions();
-    options.addOption(Backend, "backend", backend);
+    const optimize = b.option(std.lang.Optimize, "optimize", "debug · safe (default) · fast · small") orelse .safe;
 
-    // libghostty-vt, ReleaseFast whatever hull is built as: Debug terminal
-    // code is very slow, and its checks are ghostty's to run. HULL_VT_ZIG
-    // names the Zig 0.16.0 by hand.
-    const vt_build = b.addSystemCommand(&.{"sh"});
-    vt_build.addFileArg(b.path("tools/libs.sh"));
-    const vt_out = vt_build.addOutputDirectoryArg("libs");
-    vt_build.addFileInput(b.path("libs/build.zig"));
-    vt_build.addFileInput(b.path("libs/build.zig.zon"));
-
-    const vt_h = b.addTranslateC(.{
-        .root_source_file = vt_out.path(b, "include/ghostty/vt.h"),
-        .target = target,
-        .optimize = optimize,
-    });
-    vt_h.addIncludePath(vt_out.path(b, "include"));
-    vt_h.defineCMacro("GHOSTTY_STATIC", null);
-
-    const rl_h = b.addTranslateC(.{
-        .root_source_file = b.path("src/c/rl.h"),
-        .target = target,
-        .optimize = optimize,
-    });
-    rl_h.addIncludePath(vt_out.path(b, "include"));
-
-    const zt = b.dependency("ztypeset", .{ .target = target, .optimize = optimize });
-    const sdl = b.dependency("sdl", .{ .target = target, .optimize = optimize });
-    const sdl_h = b.addTranslateC(.{
-        .root_source_file = b.path("src/c/sdl.h"),
-        .target = target,
-        .optimize = optimize,
-    });
-    sdl_h.addIncludePath(sdl.path("include"));
-
-    // What a program inside hull imports to see hull's settings: std and
-    // strand, nothing of the terminal or the window.
     const strand = b.dependency("strand", .{ .target = target, .optimize = optimize }).module("strand");
     const protocol = b.addModule("hull-protocol", .{
         .root_source_file = b.path("protocol/hull_protocol.zig"),
@@ -58,58 +21,115 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "strand", .module = strand }},
     });
+    const runner = b.addExecutable(.{ .name = "hull", .root_module = runnerModule(b, target, optimize, protocol, strand) });
+    b.installArtifact(runner);
+    const run = b.addRunArtifact(runner);
+    run.addPassthruArgs();
+    b.step("run", "Run hull: `zig build run -- [--app DIR] [--headless out.png] -- program args`").dependOn(&run.step);
 
+    // the bundler runs where the app is built
+    const host = b.graph.host;
+    const bundler = b.addExecutable(.{ .name = "hull-bundle", .root_module = b.createModule(.{
+        .root_source_file = b.path("tools/bundle.zig"),
+        .target = host,
+        .optimize = .safe,
+        .imports = &.{.{ .name = "config", .module = b.createModule(.{ .root_source_file = b.path("src/config.zig"), .target = host, .optimize = .safe }) }},
+    }) });
+    b.installArtifact(bundler);
+}
+
+/// An app: the program hull runs, and who it is.
+pub const App = struct {
+    /// The program inside, the app's own executable, unchanged.
+    program: *std.Build.Step.Compile,
+    /// The app's `hull.zon`: its name, identifier and version, its window and its terminal.
+    config: std.Build.LazyPath,
+    /// A square PNG, 1024 pixels a side, for every size a platform asks.
+    icon: ?std.Build.LazyPath = null,
+};
+
+/// The app as built: the step that installs it into the prefix's `app/`, and where the bundle is.
+pub const Packaged = struct {
+    step: *std.Build.Step,
+    dir: std.Build.LazyPath,
+};
+
+/// `app` packaged by `hull`, a dependency asked for the program's target: on macOS a bundle named for the app,
+/// hull's runner inside it under the app's name, the program and its `hull.zon` beside. The app's build makes a
+/// step of it: `b.step("app", "…").dependOn(packaged.step)`.
+pub fn addApp(b: *std.Build, hull: *std.Build.Dependency, app: App) Packaged {
+    const bundle = b.addRunArtifact(hull.artifact("hull-bundle"));
+    bundle.addArtifactArg2(hull.artifact("hull"), .{});
+    bundle.addArtifactArg2(app.program, .{});
+    bundle.addFileArg2(app.config, .{});
+    if (app.icon) |icon| bundle.addFileArg2(icon, .{}) else bundle.addArg("-");
+    const dir = bundle.addOutputDirectoryArg2("app", .{});
+    const install = b.addInstallDirectory(.{ .source_dir = dir, .install_dir = .prefix, .install_subdir = "app" });
+    return .{ .step = &install.step, .dir = dir };
+}
+
+/// hull's development: the runner's units, the protocol's, and an example app packaged through `addApp` and
+/// checked, under preflight's gate. Run through bay.
+pub fn dev(b: *std.Build, tools: type) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+    const test_filter = b.option([]const u8, "test-filter", "Select tests by name");
+    const filters: []const []const u8 = if (test_filter) |filter| &.{filter} else &.{};
+    const hull = b.dependency("hull", .{ .target = target, .optimize = optimize });
+    const p = hull.builder;
+    const test_step = b.step("test", "Run the tests");
+    const strand = p.dependency("strand", .{ .target = target, .optimize = optimize }).module("strand");
+    const protocol = hull.module("hull-protocol");
+    const units = b.addTest(.{ .name = "hull-tests", .filters = filters, .root_module = runnerModule(p, target, optimize, protocol, strand) });
+    test_step.dependOn(&b.addRunArtifact(units).step);
+    const protocol_tests = b.addTest(.{ .name = "hull-protocol-tests", .filters = filters, .root_module = protocol });
+    test_step.dependOn(&b.addRunArtifact(protocol_tests).step);
+
+    // an app as a program's build makes one: a program of its own, packaged, and its bundle checked
+    const example = b.addExecutable(.{ .name = "hello", .root_module = b.createModule(.{
+        .root_source_file = p.path("examples/hello/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    const packaged = addApp(b, hull, .{ .program = example, .config = p.path("examples/hello/hull.zon") });
+    const check = b.addRunArtifact(hull.artifact("hull-bundle"));
+    check.addArg("--check");
+    check.addDirectoryArg2(packaged.dir, .{});
+    check.addArg("Hello");
+    test_step.dependOn(&check.step);
+    tools.preflight.addCi(b, p, .{ .tests = test_step });
+}
+
+// The runner: libghostty-vt from Ghostty's Zig 0.17 tree, SDL3 for the window, ztypeset for the type.
+fn runnerModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, protocol: *std.Build.Module, strand: *std.Build.Module) *std.Build.Module {
+    // ReleaseFast whatever hull is built as: Debug terminal code is very slow, and its checks are Ghostty's to
+    // run. No SIMD: its paths are C++ (simdutf, highway) the static archive does not carry at this commit.
+    const ghostty = b.dependency("ghostty", .{ .target = target, .optimize = .fast, .simd = false });
+    const vt_h = b.addTranslateC(.{ .root_source_file = ghostty.path("include/ghostty/vt.h"), .target = target, .optimize = optimize });
+    vt_h.addIncludePath(ghostty.path("include"));
+    vt_h.defineCMacro("GHOSTTY_STATIC", null);
+    const sdl = b.dependency("sdl", .{ .target = target, .optimize = optimize });
+    const sdl_h = b.addTranslateC(.{ .root_source_file = b.path("src/c/sdl.h"), .target = target, .optimize = optimize });
+    sdl_h.addIncludePath(sdl.path("include"));
+    const zt = b.dependency("ztypeset", .{ .target = target, .optimize = optimize });
+    const aegis = b.dependency("aegis", .{ .target = target, .optimize = optimize });
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        // libghostty-vt's SIMD paths are C++ (simdutf, highway)
         .link_libcpp = true,
         .imports = &.{
             .{ .name = "vt", .module = vt_h.createModule() },
-            .{ .name = "rl", .module = rl_h.createModule() },
             .{ .name = "sdl", .module = sdl_h.createModule() },
             .{ .name = "hull-protocol", .module = protocol },
             .{ .name = "strand", .module = strand },
             .{ .name = "ztypeset", .module = zt.module("ztypeset") },
+            .{ .name = "aegis", .module = aegis.module("aegis") },
         },
     });
-    mod.addObjectFile(vt_out.path(b, "lib/libghostty-vt-static.a"));
-    mod.addOptions("build_options", options);
-    switch (backend) {
-        .sdl => mod.linkLibrary(sdl.artifact("SDL3")),
-        .raylib => {
-            mod.addObjectFile(vt_out.path(b, "lib/libraylib.a"));
-            if (target.result.os.tag == .macos) {
-                for ([_][]const u8{ "OpenGL", "Cocoa", "IOKit", "CoreVideo", "CoreFoundation", "CoreGraphics" }) |f| mod.linkFramework(f, .{});
-            }
-        },
-    }
+    mod.linkLibrary(ghostty.artifact("ghostty-vt-static"));
+    mod.linkLibrary(sdl.artifact("SDL3"));
     mod.addAnonymousImport("fonts", .{ .root_source_file = b.path("fonts/fonts.zig") });
-    const exe = b.addExecutable(.{ .name = "hull", .root_module = mod });
-    b.installArtifact(exe);
-
-    const run = b.addRunArtifact(exe);
-    run.addPassthruArgs();
-    b.step("run", "Run hull: `zig build run -- [--headless out.png] -- program args`").dependOn(&run.step);
-
-    // An app: its hull.zon, its program and its icon, as a bundle.
-    const app_dir = b.option([]const u8, "app", "The app directory with hull.zon to package (default apps/wake)") orelse "apps/wake";
-    const bundle = b.addSystemCommand(&.{"sh"});
-    bundle.addFileArg(b.path("tools/bundle.sh"));
-    bundle.addArtifactArg(exe);
-    bundle.addDirectoryArg(b.path(app_dir));
-    const bundled = bundle.addOutputDirectoryArg("app");
-    bundle.has_side_effects = true;
-    const install_app = b.addInstallDirectory(.{ .source_dir = bundled, .install_dir = .prefix, .install_subdir = "app" });
-    b.step("app", "Package an app's .app into zig-out/app").dependOn(&install_app.step);
-
-    const tests = b.addTest(.{ .root_module = mod });
-    const test_step = b.step("test", "Run the units");
-    test_step.dependOn(&b.addRunArtifact(tests).step);
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = protocol })).step);
+    return mod;
 }
-
-/// What draws hull's window.
-const Backend = enum { sdl, raylib };

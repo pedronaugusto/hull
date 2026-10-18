@@ -1,0 +1,12 @@
+{
+  "land": true,
+  "attest": true,
+  "release": true,
+  "compile_step": "check",
+  "targets": [
+    "x86_64-linux-gnu",
+    "aarch64-linux-gnu"
+  ],
+  "compile_once": true,
+  "hardened": false
+}

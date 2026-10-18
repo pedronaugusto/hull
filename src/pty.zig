@@ -28,7 +28,7 @@ pub const channel_fd = 3;
 extern "c" fn __error() *c_int;
 extern "c" fn __errno_location() *c_int;
 
-const TIOCSWINSZ: c_ulong = switch (builtin.os.tag) {
+const set_window_size: c_ulong = switch (builtin.os.tag) {
     .macos => 0x80087467,
     else => 0x5414,
 };
@@ -37,9 +37,9 @@ fn errno() c_int {
     return if (builtin.os.tag == .macos) __error().* else __errno_location().*;
 }
 
-const EAGAIN: c_int = if (builtin.os.tag == .macos) 35 else 11;
-const EINTR: c_int = 4;
-const EIO: c_int = 5;
+const try_again: c_int = if (builtin.os.tag == .macos) 35 else 11;
+const interrupted: c_int = 4;
+const io_error: c_int = 5;
 
 pub const Pty = struct {
     fd: c_int,
@@ -68,7 +68,7 @@ pub const Pty = struct {
             if (ccwd) |d| _ = chdir(d);
             // dup2 leaves the copy open across exec, the original not
             if (give) |g| _ = dup2(g, channel_fd);
-            _ = c.execve(path, @ptrCast(cargv.ptr), @ptrCast(cenv.ptr));
+            _ = c.execve(path, @ptrCast(cargv.ptr), @ptrCast(cenv.ptr)); // safe: null-terminated arrays, made for execve
             c._exit(127);
         }
         const flags = c.fcntl(fd, c.F.GETFL);
@@ -86,9 +86,9 @@ pub const Pty = struct {
             if (n > 0) return .{ .n = @intCast(n), .state = if (@as(usize, @intCast(n)) == buf.len) .more else .drained };
             if (n == 0) return .{ .n = 0, .state = .ended };
             const e = errno();
-            if (e == EINTR) continue;
-            if (e == EAGAIN) return .{ .n = 0, .state = .drained };
-            // EIO: the slave closed, as Linux says it
+            if (e == interrupted) continue;
+            if (e == try_again) return .{ .n = 0, .state = .drained };
+            // io_error: the slave closed, as Linux says it
             return .{ .n = 0, .state = .ended };
         }
     }
@@ -104,8 +104,8 @@ pub const Pty = struct {
                 continue;
             }
             const e = errno();
-            if (e == EINTR) continue;
-            if (e == EAGAIN) {
+            if (e == interrupted) continue;
+            if (e == try_again) {
                 var pfd = [_]c.pollfd{.{ .fd = p.fd, .events = c.POLL.OUT, .revents = 0 }};
                 _ = c.poll(&pfd, 1, 100);
                 continue;
@@ -115,7 +115,7 @@ pub const Pty = struct {
     }
 
     pub fn resize(p: *Pty, ws: Winsize) void {
-        _ = ioctl(p.fd, TIOCSWINSZ, &ws);
+        _ = ioctl(p.fd, set_window_size, &ws);
     }
 
     /// Whether the program has ended, reaping it if so.

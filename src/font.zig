@@ -92,7 +92,7 @@ pub const Fonts = struct {
     /// `cp` in `style`, from the regular face when the styled one lacks
     /// it; null when no face has it.
     pub fn raster(f: *Fonts, cp: u21, style: Style) ?Bitmap {
-        var i: usize = @intFromEnum(style);
+        var i: usize = @backingInt(style);
         var gid = f.font[i].glyphIndex(cp);
         if (gid == 0 and i != 0) {
             i = 0;

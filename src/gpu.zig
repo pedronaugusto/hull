@@ -11,7 +11,7 @@
 //! place: the texture is kept, never made again for each phase.
 const std = @import("std");
 const c = @import("sdl");
-const render = @import("../render.zig");
+const render = @import("render.zig");
 const Rect = render.Rect;
 const Color = render.Color;
 
@@ -82,7 +82,7 @@ pub const Gpu = struct {
     };
 
     fn self(ptr: *anyopaque) *Gpu {
-        return @ptrCast(@alignCast(ptr));
+        return @ptrCast(@alignCast(ptr)); // safe: the backend's own pointer, made by `backend`
     }
 
     fn begin(ptr: *anyopaque, w: u32, h: u32, ground: Color) void {
@@ -164,7 +164,7 @@ pub const Gpu = struct {
         const h: u32 = @intCast(rgba.*.h);
         g.snap.resize(g.gpa, @as(usize, w) * h) catch return;
         const pitch: usize = @intCast(rgba.*.pitch);
-        const bytes: [*]const u8 = @ptrCast(rgba.*.pixels.?);
+        const bytes: [*]const u8 = @ptrCast(rgba.*.pixels.?); // safe: the surface's pixels, RGBA32 as converted
         for (0..h) |y| for (0..w) |x| {
             const p = bytes[y * pitch + x * 4 ..][0..4];
             g.snap.items[y * w + x] = (@as(u32, p[3]) << 24) | (@as(u32, p[0]) << 16) | (@as(u32, p[1]) << 8) | p[2];

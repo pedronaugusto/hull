@@ -1,0 +1,8 @@
+{
+  "shipped": {
+    "protocol": "hull-protocol, the module a program inside hull imports to see hull's settings.",
+    "fonts": "The runner's own face, JetBrains Mono, for an app that names none.",
+    "tools": "The bundler addApp runs where an app is built.",
+    "docs": "hull's design, beside the code it describes."
+  }
+}
