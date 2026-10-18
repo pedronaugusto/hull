@@ -3,11 +3,16 @@
     .version = "0.0.0",
     .minimum_zig_version = "0.17.0",
     .fingerprint = 0xa0a3932049b1a5,
-    .paths = .{ "build.zig", "build.zig.zon", "src", "fonts", "libs", "tools", "apps", "README.md" },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "protocol", "fonts", "libs", "tools", "apps", "README.md" },
     .dependencies = .{
         // libghostty-vt is not here: libs/build.zig.zon pins it, with raylib,, at the
         // family's ghostty commit, for the Zig that commit builds with.
         //
+        // the protocol's lines, typed JSON
+        .strand = .{
+            .url = "git+https://github.com/pedronaugusto/strand?ref=v0.13.0#2e5339055003178387222ec2fbb674b95c5432de",
+            .hash = "strand-0.13.0-8LNWVvwIJwBSRhUdNPFzHda8W132HUFV6AFq4xA_-Zz-",
+        },
         // shaping and rasterising: the family's, as lantern pins it
         .ztypeset = .{
             .url = "git+https://github.com/pedronaugusto/ztypeset?ref=v0.3.0#7a5255a8c9e1bf5d3dbe1ae0ac49582cd71b2284",

@@ -12,6 +12,7 @@ const Pty = @import("pty.zig").Pty;
 const Winsize = @import("pty.zig").Winsize;
 
 pub const Vt = vt_mod.Vt;
+const c = vt_mod.c;
 
 extern "c" fn clock_gettime_nsec_np(clock: c_int) u64;
 
@@ -38,6 +39,12 @@ pub const Session = struct {
     fonts: font.Fonts,
     vt: Vt,
     pty: Pty = undefined,
+    /// hull's end of the program's settings channel.
+    channel: ?c_int = null,
+    font_bytes: font.Fonts.Bytes,
+    fallback: []const []const u8,
+    /// Bumped when the faces change: the renderer's atlas starts over.
+    font_epoch: u32 = 0,
     spawned: bool = false,
     ended: bool = false,
     /// Device pixels per point.
@@ -63,6 +70,8 @@ pub const Session = struct {
             .app = app,
             .fonts = try font.Fonts.init(gpa, font_bytes, fallback, t.font_size * scale, t.adjust_cell_width * scale, t.adjust_cell_height * scale),
             .vt = undefined,
+            .font_bytes = font_bytes,
+            .fallback = fallback,
             .scale = scale,
             .layout = undefined,
             .w = 0,
@@ -81,6 +90,7 @@ pub const Session = struct {
     }
 
     pub fn deinit(s: *Session) void {
+        if (s.channel) |f| _ = std.c.close(f);
         if (s.spawned) s.pty.close();
         s.vt.deinit();
         s.fonts.deinit();
@@ -113,12 +123,16 @@ pub const Session = struct {
             "COLORTERM=truecolor",
             "TERM_PROGRAM=hull",
             "TERM_PROGRAM_VERSION=" ++ vt_mod.version,
+            std.fmt.comptimePrint("HULL_SOCKET=fd:{d}", .{@import("pty.zig").channel_fd}),
             "HULL=" ++ vt_mod.version,
             try std.fmt.allocPrint(a, "HULL_APP={s}", .{s.app.id}),
             try std.fmt.allocPrint(a, "HULL_THEME={s}", .{t.theme}),
         });
         if (parent_env.get("LANG") == null) try env.append(a, "LANG=en_US.UTF-8");
-        s.pty = try Pty.spawn(a, argv, env.items, cwd, s.winsize());
+        const ch = try @import("pty.zig").channel();
+        s.pty = try Pty.spawn(a, argv, env.items, cwd, s.winsize(), ch[1]);
+        _ = std.c.close(ch[1]);
+        s.channel = ch[0];
         s.spawned = true;
         s.vt.pty = &s.pty;
     }
@@ -167,9 +181,35 @@ pub const Session = struct {
         const rows: u16 = @intCast(@max(1, (h -| 2 * py) / ch));
         s.layout.pad_x = (w - @min(w, cols * cw)) / 2;
         s.layout.pad_y = (h - @min(h, rows * ch)) / 2;
-        if (cols == s.vt.cols and rows == s.vt.rows) return;
+        if (cols == s.vt.cols and rows == s.vt.rows and cw == s.vt.cell_w and ch == s.vt.cell_h) return;
         s.vt.resize(cols, rows, cw, ch);
         if (s.spawned) s.pty.resize(s.winsize());
+    }
+
+    /// The faces at a new size: the cell, and so the grid, follow.
+    pub fn setFontSize(s: *Session, pt: f32) !void {
+        const t = s.app.terminal;
+        const next = try font.Fonts.init(s.gpa, s.font_bytes, s.fallback, pt * s.scale, t.adjust_cell_width * s.scale, t.adjust_cell_height * s.scale);
+        s.fonts.deinit();
+        s.fonts = next;
+        s.app.terminal.font_size = pt;
+        s.font_epoch += 1;
+        s.layout.cell_w = next.cell_w;
+        s.layout.cell_h = next.cell_h;
+        s.resize(s.w, s.h);
+    }
+
+    pub fn setPadding(s: *Session, pt: u16) void {
+        s.app.terminal.padding_x = pt;
+        s.app.terminal.padding_y = pt;
+        s.resize(s.w, s.h);
+    }
+
+    /// A theme's colours as the terminal's defaults, and the program told
+    /// if it asked to hear of it (mode 2031): it asks OSC 4/10/11 again.
+    pub fn setTheme(s: *Session, th: theme.Theme) void {
+        s.vt.setColors(th);
+        if (s.vt.mode(c.ghostty_mode_new(2031, false))) s.send(if (th.dark) "\x1b[?997;1n" else "\x1b[?997;2n");
     }
 
     pub fn send(s: *Session, bytes: []const u8) void {
@@ -189,6 +229,10 @@ pub const Session = struct {
 
     /// Draws and presents a frame through `r`.
     pub fn draw(s: *Session, r: *render.Renderer) render.Stats {
+        if (r.epoch != s.font_epoch) {
+            r.resetGlyphs();
+            r.epoch = s.font_epoch;
+        }
         const st = r.draw(&s.vt, &s.fonts, s.w, s.h, s.layout);
         const t = now();
         if (s.first_frame_ns == null and s.output_bytes > 0) s.first_frame_ns = t;

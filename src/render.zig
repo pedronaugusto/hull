@@ -91,6 +91,8 @@ pub const Renderer = struct {
     shelf_h: u32 = 0,
     images: std.AutoHashMapUnmanaged(u64, Image) = .empty,
     frame: u64 = 0,
+    /// The faces the atlas holds glyphs of (`Session.font_epoch`).
+    epoch: u32 = 0,
     rgba: std.ArrayList(u8) = .empty,
 
     pub fn init(gpa: std.mem.Allocator, backend: Backend) Renderer {
@@ -104,6 +106,14 @@ pub const Renderer = struct {
     }
 
     /// Draws the terminal's state, then presents.
+    /// The faces changed: every glyph is rasterised again.
+    pub fn resetGlyphs(r: *Renderer) void {
+        r.glyphs.clearRetainingCapacity();
+        r.shelf_x = 0;
+        r.shelf_y = 0;
+        r.shelf_h = 0;
+    }
+
     pub fn draw(r: *Renderer, v: *Vt, f: *font.Fonts, w: u32, h: u32, lay: Layout) Stats {
         r.frame += 1;
         var stats: Stats = .{};

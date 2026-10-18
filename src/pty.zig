@@ -9,6 +9,22 @@ pub const Winsize = extern struct { rows: u16, cols: u16, x_pixel: u16, y_pixel:
 extern "c" fn forkpty(master: *c_int, name: ?[*]u8, termp: ?*const anyopaque, winp: ?*const Winsize) c_int;
 extern "c" fn ioctl(fd: c_int, request: c_ulong, ...) c_int;
 extern "c" fn chdir(path: [*:0]const u8) c_int;
+extern "c" fn dup2(old: c_int, new: c_int) c_int;
+extern "c" fn socketpair(domain: c_int, kind: c_int, protocol: c_int, fds: *[2]c_int) c_int;
+
+/// A connected pair of Unix stream sockets: hull's end, close-on-exec and
+/// not blocking, and the program's, which `spawn` makes its fd 3.
+pub fn channel() ![2]c_int {
+    var fds: [2]c_int = undefined;
+    if (socketpair(1, 1, 0, &fds) != 0) return error.SocketPair; // AF_UNIX, SOCK_STREAM
+    for (fds) |f| _ = c.fcntl(f, c.F.SETFD, @as(c_int, 1)); // FD_CLOEXEC
+    const flags = c.fcntl(fds[0], c.F.GETFL);
+    _ = c.fcntl(fds[0], c.F.SETFL, flags | @as(c_int, @bitCast(c.O{ .NONBLOCK = true })));
+    return fds;
+}
+
+/// The descriptor a program finds hull's channel on.
+pub const channel_fd = 3;
 extern "c" fn __error() *c_int;
 extern "c" fn __errno_location() *c_int;
 
@@ -34,7 +50,7 @@ pub const Pty = struct {
     /// Runs `argv` with `env` (each "KEY=value") in `cwd` on a new pty.
     /// Everything the child needs is made before the fork: between fork
     /// and exec it only calls what is async-signal-safe.
-    pub fn spawn(arena: std.mem.Allocator, argv: []const []const u8, env: []const []const u8, cwd: ?[]const u8, ws: Winsize) !Pty {
+    pub fn spawn(arena: std.mem.Allocator, argv: []const []const u8, env: []const []const u8, cwd: ?[]const u8, ws: Winsize, give: ?c_int) !Pty {
         if (argv.len == 0) return error.NoProgram;
         const cargv = try arena.alloc(?[*:0]const u8, argv.len + 1);
         for (argv, 0..) |a, i| cargv[i] = try arena.dupeSentinel(u8, a, 0);
@@ -50,6 +66,8 @@ pub const Pty = struct {
         if (pid < 0) return error.ForkPty;
         if (pid == 0) {
             if (ccwd) |d| _ = chdir(d);
+            // dup2 leaves the copy open across exec, the original not
+            if (give) |g| _ = dup2(g, channel_fd);
             _ = c.execve(path, @ptrCast(cargv.ptr), @ptrCast(cenv.ptr));
             c._exit(127);
         }

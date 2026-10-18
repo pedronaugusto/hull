@@ -39,6 +39,16 @@ pub fn build(b: *std.Build) void {
 
     const zt = b.dependency("ztypeset", .{ .target = target, .optimize = optimize });
 
+    // What a program inside hull imports to see hull's settings: std and
+    // strand, nothing of the terminal or the window.
+    const strand = b.dependency("strand", .{ .target = target, .optimize = optimize }).module("strand");
+    const protocol = b.addModule("hull-protocol", .{
+        .root_source_file = b.path("protocol/hull_protocol.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "strand", .module = strand }},
+    });
+
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -49,6 +59,8 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "vt", .module = vt_h.createModule() },
             .{ .name = "rl", .module = rl_h.createModule() },
+            .{ .name = "hull-protocol", .module = protocol },
+            .{ .name = "strand", .module = strand },
             .{ .name = "ztypeset", .module = zt.module("ztypeset") },
         },
     });
@@ -77,5 +89,7 @@ pub fn build(b: *std.Build) void {
     b.step("app", "Package an app's .app into zig-out/app").dependOn(&install_app.step);
 
     const tests = b.addTest(.{ .root_module = mod });
-    b.step("test", "Run the units").dependOn(&b.addRunArtifact(tests).step);
+    const test_step = b.step("test", "Run the units");
+    test_step.dependOn(&b.addRunArtifact(tests).step);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = protocol })).step);
 }

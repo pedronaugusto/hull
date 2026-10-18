@@ -10,6 +10,7 @@ const render = @import("render.zig");
 const Cpu = @import("cpu.zig").Cpu;
 const Canvas = @import("cpu.zig").Canvas;
 const png = @import("png.zig");
+const Settings = @import("settings.zig").Settings;
 
 pub const Press = struct { at: f64, key: vt_mod.Key };
 
@@ -21,9 +22,18 @@ pub const Options = struct {
     /// Frames taken at these further moments, `out` with `-<n>` before
     /// its extension; for shimmer and timing.
     also: []const f64 = &.{},
+    /// As if the window were full screen: opaque, opacity unavailable.
+    fullscreen: bool = false,
 };
 
 pub fn run(gpa: std.mem.Allocator, io: std.Io, s: *Session, opts: Options) !void {
+    var st = Settings.init(gpa, s.app.terminal);
+    defer st.deinit();
+    if (opts.fullscreen) {
+        st.is_fullscreen = true;
+        s.vt.opacity = st.drawnOpacity();
+    }
+    st.hello(s);
     var cpu = try Cpu.init(gpa);
     defer cpu.deinit();
     var r = render.Renderer.init(gpa, cpu.backend());
@@ -48,12 +58,12 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, s: *Session, opts: Options) !void
             } else {
                 sync_wait = null;
                 const t0 = now();
-                const st = s.draw(&r);
+                const drawn = s.draw(&r);
                 const dt = @as(f64, @floatFromInt(now() - t0)) / 1e6;
                 const path = if (shot == 0 and shots.items.len == 1) opts.out else try numbered(gpa, opts.out, shot);
                 defer if (path.ptr != opts.out.ptr) gpa.free(path);
                 try save(gpa, io, cpu.canvas, path);
-                std.log.info("{s}: {d}x{d} px, {d}x{d} cells, {d} pictures, drawn in {d:.2} ms, at {d:.2} s", .{ path, s.w, s.h, s.vt.cols, s.vt.rows, st.images, dt, t });
+                std.log.info("{s}: {d}x{d} px, {d}x{d} cells, {d} pictures, drawn in {d:.2} ms, at {d:.2} s", .{ path, s.w, s.h, s.vt.cols, s.vt.rows, drawn.images, dt, t });
                 shot += 1;
                 continue;
             }
@@ -66,9 +76,16 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, s: *Session, opts: Options) !void
         var until = shots.items[shot];
         if (next < opts.presses.len) until = @min(until, opts.presses[next].at);
         const wait_ms: c_int = @intFromFloat(std.math.clamp((until - secs(start)) * 1000, 0, 50));
-        var pfd = [_]std.c.pollfd{.{ .fd = s.pty.fd, .events = std.c.POLL.IN, .revents = 0 }};
-        _ = std.c.poll(&pfd, 1, if (sync_wait != null) 5 else wait_ms);
+        var pfd = [_]std.c.pollfd{
+            .{ .fd = s.pty.fd, .events = std.c.POLL.IN, .revents = 0 },
+            .{ .fd = s.channel orelse -1, .events = std.c.POLL.IN, .revents = 0 },
+        };
+        _ = std.c.poll(&pfd, 2, if (sync_wait != null) 5 else wait_ms);
         _ = s.pump();
+        switch (st.service(io, s)) {
+            .fullscreen => st.windowFullscreen(s, st.fullscreen),
+            else => {},
+        }
     }
 }
 

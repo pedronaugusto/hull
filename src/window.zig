@@ -20,9 +20,11 @@ const session_mod = @import("session.zig");
 const Session = session_mod.Session;
 const now = session_mod.now;
 const vt_mod = @import("vt.zig");
+const settings_mod = @import("settings.zig");
 const c = vt_mod.c;
 
 pub const Options = struct {
+    io: std.Io,
     /// Write the window's own frame at this moment as a PNG: "path@seconds".
     snap: ?[]const u8 = null,
     /// Press keys itself and report what it measured on exit.
@@ -32,6 +34,9 @@ pub const Options = struct {
 
 /// The program's output, handed from the reader thread to the loop.
 const Inbox = struct {
+    /// The settings channel, watched while the loop has drained it.
+    channel: c_int = -1,
+    channel_armed: std.atomic.Value(bool) = .init(true),
     mutex: std.c.pthread_mutex_t = std.c.PTHREAD_MUTEX_INITIALIZER,
     cond: std.c.pthread_cond_t = std.c.PTHREAD_COND_INITIALIZER,
     buf: [1 << 20]u8 = undefined,
@@ -101,10 +106,16 @@ pub fn run(gpa: std.mem.Allocator, app: config.App, bytes: font.Fonts.Bytes, fal
     var r = render.Renderer.init(gpa, gl.backend());
     defer r.deinit();
 
+    var st = settings_mod.Settings.init(gpa, app.terminal);
+    defer st.deinit();
+    st.load(opts.io, env, app.id);
+    try st.applyLoaded(&s);
     try s.spawn(argv, env, cwd);
+    st.hello(&s);
+    if (st.fullscreen) toggleFullscreen();
     const inbox = try gpa.create(Inbox);
     defer gpa.destroy(inbox);
-    inbox.* = .{};
+    inbox.* = .{ .channel = s.channel orelse -1 };
     var w: Win = .{ .gpa = gpa, .s = &s, .app = app, .inbox = inbox };
     defer {
         w.latencies.deinit(gpa);
@@ -181,6 +192,22 @@ pub fn run(gpa: std.mem.Allocator, app: config.App, bytes: font.Fonts.Bytes, fal
             s.resize(rw, rh);
             w.dirty = true;
         }
+        // The settings channel, and the window's own full screen.
+        switch (st.service(opts.io, &s)) {
+            .none => {},
+            .redraw => w.dirty = true,
+            .fullscreen => if (st.fullscreen != isFullscreen()) {
+                if (std.c.getenv("HULL_DIAG") != null) std.debug.print("{d} toggle\n", .{now() / std.time.ns_per_ms});
+                toggleFullscreen();
+            },
+        }
+        inbox.channel_armed.store(true, .release);
+        const fs = isFullscreen();
+        if (fs != st.is_fullscreen and std.c.getenv("HULL_DIAG") != null) std.debug.print("{d} full screen {}\n", .{ now() / std.time.ns_per_ms, fs });
+        if (fs != st.is_fullscreen) {
+            st.windowFullscreen(&s, fs);
+            w.dirty = true;
+        }
         if (s.vt.title_changed) {
             s.vt.title_changed = false;
             if (app.window.program_title) {
@@ -244,12 +271,47 @@ fn saveSnap(gpa: std.mem.Allocator, path: []const u8, px: []u32, w: u32, h: u32)
     std.log.info("{s}: the window's frame, {d}x{d} px", .{ path, w, h });
 }
 
+extern "c" fn objc_msgSend() void;
+extern "c" fn sel_registerName(name: [*:0]const u8) ?*anyopaque;
+
+/// Whether the window is full screen: macOS's own (its green button, or
+/// hull's toggle), or raylib's elsewhere.
+fn isFullscreen() bool {
+    if (builtin.os.tag == .macos) {
+        const ns = rl.GetWindowHandle() orelse return false;
+        const msg: *const fn (?*anyopaque, ?*anyopaque) callconv(.c) c_ulong = @ptrCast(&objc_msgSend);
+        return msg(ns, sel_registerName("styleMask")) & (1 << 14) != 0; // NSWindowStyleMaskFullScreen
+    }
+    return rl.IsWindowFullscreen() or rl.IsWindowState(rl.FLAG_BORDERLESS_WINDOWED_MODE);
+}
+
+/// Into or out of full screen: on macOS its own, in a Space of its own, as
+/// the green button does; raylib's borderless window elsewhere.
+fn toggleFullscreen() void {
+    if (builtin.os.tag == .macos) {
+        const ns = rl.GetWindowHandle() orelse return;
+        const msg: *const fn (?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.c) void = @ptrCast(&objc_msgSend);
+        msg(ns, sel_registerName("toggleFullScreen:"), null);
+        return;
+    }
+    rl.ToggleBorderlessWindowed();
+}
+
 /// Reads the program's output on its own thread; the loop takes it.
 fn readLoop(s: *Session, inbox: *Inbox) void {
     var buf: [64 * 1024]u8 = undefined;
     while (true) {
-        var pfd = [_]std.c.pollfd{.{ .fd = s.pty.fd, .events = std.c.POLL.IN, .revents = 0 }};
-        _ = std.c.poll(&pfd, 1, 100);
+        const watch = inbox.channel >= 0 and inbox.channel_armed.load(.acquire);
+        var pfd = [_]std.c.pollfd{
+            .{ .fd = s.pty.fd, .events = std.c.POLL.IN, .revents = 0 },
+            .{ .fd = if (watch) inbox.channel else -1, .events = std.c.POLL.IN, .revents = 0 },
+        };
+        _ = std.c.poll(&pfd, 2, 100);
+        if (pfd[1].revents != 0) {
+            // the loop reads it; wake it once until it has
+            inbox.channel_armed.store(false, .release);
+            rl.glfwPostEmptyEvent();
+        }
         _ = std.c.pthread_mutex_lock(&inbox.mutex);
         if (inbox.stop) {
             _ = std.c.pthread_mutex_unlock(&inbox.mutex);

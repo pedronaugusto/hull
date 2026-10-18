@@ -11,6 +11,7 @@
 //!     --keys T:K,...     headless keys at seconds: enter, right, a, ...
 //!     --scale N          headless device pixels per point (default 2)
 //!     --size COLSxROWS   the grid (the app's otherwise)
+//!     --fullscreen       headless: as if full screen (opaque; opacity unavailable)
 //!     --bench            window: press keys itself and report latency,
 //!                        frame time, memory and startup on exit
 const std = @import("std");
@@ -40,6 +41,7 @@ pub fn main(init: std.process.Init) !void {
     var theme_name: ?[]const u8 = null;
     var bench = false;
     var opacity: ?i64 = null;
+    var fullscreen = false;
     var describe = false;
     var program: std.ArrayList([]const u8) = .empty;
     while (args.next()) |a| {
@@ -69,6 +71,8 @@ pub fn main(init: std.process.Init) !void {
             theme_name = try arena.dupe(u8, args.next() orelse return usage());
         } else if (std.mem.eql(u8, a, "--opacity")) {
             opacity = try std.fmt.parseInt(i64, args.next() orelse return usage(), 10);
+        } else if (std.mem.eql(u8, a, "--fullscreen")) {
+            fullscreen = true;
         } else if (std.mem.eql(u8, a, "--bench")) {
             bench = true;
         } else if (std.mem.eql(u8, a, "--describe")) {
@@ -142,13 +146,14 @@ pub fn main(init: std.process.Init) !void {
         try s.init(gpa, app, bytes, fallback.items, scale);
         defer s.deinit();
         try s.spawn(argv, init.environ_map, null);
-        try headless.run(gpa, io, &s, .{ .out = o, .at = at, .also = also, .presses = keys });
+        try headless.run(gpa, io, &s, .{ .out = o, .at = at, .also = also, .presses = keys, .fullscreen = fullscreen });
         return;
     }
     try @import("window.zig").run(gpa, app, bytes, fallback.items, argv, init.environ_map, init.environ_map.get("HOME"), .{
         .bench = bench,
         .bench_out = init.environ_map.get("HULL_BENCH_OUT"),
         .snap = init.environ_map.get("HULL_SNAP"),
+        .io = io,
     });
 }
 
@@ -186,4 +191,5 @@ test {
     _ = @import("cpu.zig");
     _ = @import("keys.zig");
     _ = @import("pngdec.zig");
+    _ = @import("settings.zig");
 }

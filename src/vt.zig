@@ -50,17 +50,7 @@ pub const Vt = struct {
         _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_COLOR_SCHEME, @ptrCast(&colorScheme));
         _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_TITLE_CHANGED, @ptrCast(&titleChanged));
 
-        // The theme, as the terminal's defaults: what OSC 4/10/11 report
-        // and what an OSC 104/110/111 reset returns to.
-        var fg = rgb(th.foreground);
-        var bg = rgb(th.background);
-        var cur = rgb(th.cursor);
-        var pal: [256]c.GhosttyColorRgb = undefined;
-        for (th.palette(), 0..) |p, i| pal[i] = rgb(p);
-        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &fg);
-        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &bg);
-        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &cur);
-        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, &pal);
+        v.setColors(th);
 
         var style: c.GhosttyTerminalCursorStyle = switch (term_cfg.cursor_style) {
             .block => c.GHOSTTY_TERMINAL_CURSOR_STYLE_BLOCK,
@@ -91,6 +81,21 @@ pub const Vt = struct {
         try ok(c.ghostty_key_event_new(null, &v.key_event));
         var alt: c.GhosttyOptionAsAlt = if (term_cfg.option_as_alt) c.GHOSTTY_OPTION_AS_ALT_TRUE else c.GHOSTTY_OPTION_AS_ALT_FALSE;
         c.ghostty_key_encoder_setopt(v.key_encoder, c.GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT, &alt);
+    }
+
+    /// The theme, as the terminal's defaults: what OSC 4/10/11 report and
+    /// what an OSC 104/110/111 reset returns to.
+    pub fn setColors(v: *Vt, th: theme_mod.Theme) void {
+        v.dark = th.dark;
+        var fg = rgb(th.foreground);
+        var bg = rgb(th.background);
+        var cur = rgb(th.cursor);
+        var pal: [256]c.GhosttyColorRgb = undefined;
+        for (th.palette(), 0..) |p, i| pal[i] = rgb(p);
+        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &fg);
+        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &bg);
+        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &cur);
+        _ = c.ghostty_terminal_set(v.term, c.GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, &pal);
     }
 
     pub fn deinit(v: *Vt) void {
