@@ -1,9 +1,14 @@
 # hull
 
-Any terminal program in a native window of its own, shipped as an app: the program runs unchanged on a pty,
-libghostty-vt keeps its terminal, and hull draws that terminal in a window that carries the app's name, never
-hull's. One program per window; the app sets everything, nothing comes from the player's terminal. On Windows it
-is how a terminal program ships at all. Private, MIT, public from its first release.
+hull packages a terminal program as a desktop app. The program runs on a pty inside hull's window;
+[libghostty-vt](https://github.com/ghostty-org/ghostty) emulates the terminal and SDL3 draws it.
+
+- Text from ztypeset's glyphs, kitty pictures drawn pixel for pixel, the kitty keyboard protocol.
+- The terminal configured by the app's `hull.zon`: font, theme, padding, opacity, window size and policy.
+- Settings a program can read and change while it runs, over `hull-protocol`.
+- A bundle made from the app's own build with `addApp`.
+
+Status: **0.0.0**, private. macOS works; Linux builds; Windows is not built yet. MIT.
 
 ## An app from its own build
 
