@@ -124,8 +124,35 @@ pub fn parsePresses(gpa: std.mem.Allocator, spec: []const u8) ![]Press {
     return out.toOwnedSlice(gpa);
 }
 
-/// A key by name, as a US keyboard makes it.
-pub fn named(name: []const u8) ?vt_mod.Key {
+/// A key by name, as a US keyboard makes it, after any of `ctrl+`, `alt+`,
+/// `shift+`, `super+`.
+pub fn named(spec: []const u8) ?vt_mod.Key {
+    var name = spec;
+    var mods: c.GhosttyMods = 0;
+    const prefixes = [_]struct { []const u8, c.GhosttyMods }{
+        .{ "ctrl+", c.GHOSTTY_MODS_CTRL }, .{ "alt+", c.GHOSTTY_MODS_ALT }, .{ "shift+", c.GHOSTTY_MODS_SHIFT }, .{ "super+", c.GHOSTTY_MODS_SUPER },
+    };
+    outer: while (true) {
+        for (prefixes) |p| if (std.mem.startsWith(u8, name, p[0])) {
+            name = name[p[0].len..];
+            mods |= p[1];
+            continue :outer;
+        };
+        break;
+    }
+    var k = plain(name) orelse return null;
+    k.mods = mods;
+    // ctrl and alt make no text of their own; shift makes the capital
+    if (mods & (c.GHOSTTY_MODS_CTRL | c.GHOSTTY_MODS_SUPER) != 0) k.text = "" else if (mods & c.GHOSTTY_MODS_SHIFT != 0 and k.text.len == 1 and k.text[0] >= 'a' and k.text[0] <= 'z') {
+        k.text = capitals[k.text[0] - 'a' ..][0..1];
+        k.consumed = c.GHOSTTY_MODS_SHIFT;
+    }
+    return k;
+}
+
+const capitals = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+fn plain(name: []const u8) ?vt_mod.Key {
     const table = [_]struct { []const u8, c.GhosttyKey, []const u8, u32 }{
         .{ "enter", c.GHOSTTY_KEY_ENTER, "\r", '\r' },
         .{ "escape", c.GHOSTTY_KEY_ESCAPE, "", 0 },

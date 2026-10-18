@@ -32,6 +32,7 @@ pub const Vt = struct {
     opacity: u8 = 100,
     /// Set when the program changed its title.
     title_changed: bool = false,
+    option_as_alt: c.GhosttyOptionAsAlt = c.GHOSTTY_OPTION_AS_ALT_TRUE,
 
     pub fn init(v: *Vt, cols: u16, rows: u16, cell_w: u32, cell_h: u32, th: theme_mod.Theme, term_cfg: config.Terminal) !void {
         installPng();
@@ -79,8 +80,7 @@ pub const Vt = struct {
         try ok(c.ghostty_kitty_graphics_placement_iterator_new(null, &v.placements));
         try ok(c.ghostty_key_encoder_new(null, &v.key_encoder));
         try ok(c.ghostty_key_event_new(null, &v.key_event));
-        var alt: c.GhosttyOptionAsAlt = if (term_cfg.option_as_alt) c.GHOSTTY_OPTION_AS_ALT_TRUE else c.GHOSTTY_OPTION_AS_ALT_FALSE;
-        c.ghostty_key_encoder_setopt(v.key_encoder, c.GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT, &alt);
+        v.option_as_alt = if (term_cfg.option_as_alt) c.GHOSTTY_OPTION_AS_ALT_TRUE else c.GHOSTTY_OPTION_AS_ALT_FALSE;
     }
 
     /// The theme, as the terminal's defaults: what OSC 4/10/11 report and
@@ -145,6 +145,11 @@ pub const Vt = struct {
     /// kitty keyboard protocol among them) into `out`.
     pub fn encodeKey(v: *Vt, k: Key, out: []u8) []const u8 {
         c.ghostty_key_encoder_setopt_from_terminal(v.key_encoder, v.term);
+        // Alt sends ESC before the key, as xterm's metaSendsEscape and every
+        // macOS terminal with Option as Alt do; mode 1036 is off by default.
+        var esc = true;
+        c.ghostty_key_encoder_setopt(v.key_encoder, c.GHOSTTY_KEY_ENCODER_OPT_ALT_ESC_PREFIX, &esc);
+        c.ghostty_key_encoder_setopt(v.key_encoder, c.GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT, &v.option_as_alt);
         const e = v.key_event;
         c.ghostty_key_event_set_action(e, @intFromEnum(k.action));
         c.ghostty_key_event_set_key(e, k.key);

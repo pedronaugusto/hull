@@ -64,6 +64,9 @@ const Win = struct {
     latencies: std.ArrayList(u64) = .empty,
     to_output: std.ArrayList(u64) = .empty,
     draws: std.ArrayList(u64) = .empty,
+    /// Frames drawn while only the title's shimmer moved.
+    idle_draws: std.ArrayList(u64) = .empty,
+    idle_until: u64 = 0,
     frames: std.ArrayList(u64) = .empty,
 };
 
@@ -121,6 +124,7 @@ pub fn run(gpa: std.mem.Allocator, app: config.App, bytes: font.Fonts.Bytes, fal
         w.latencies.deinit(gpa);
         w.to_output.deinit(gpa);
         w.draws.deinit(gpa);
+        w.idle_draws.deinit(gpa);
         w.frames.deinit(gpa);
     }
     win = &w;
@@ -140,7 +144,8 @@ pub fn run(gpa: std.mem.Allocator, app: config.App, bytes: font.Fonts.Bytes, fal
     _ = rl.glfwSetCharCallback(glfw, onChar);
     _ = rl.glfwSetWindowFocusCallback(glfw, onFocus);
 
-    var bench: Bench = .{ .start = now() };
+    var bench: Bench = .{ .start = now(), .delay = if (std.c.getenv("HULL_BENCH_IDLE")) |d| std.fmt.parseFloat(f64, std.mem.span(d)) catch 0 else 0 };
+    w.idle_until = bench.start + @as(u64, @intFromFloat(bench.delay * 1e9));
     var sync_since: ?u64 = null;
     var last_mem: u64 = 0;
     var snap_at: ?f64 = null;
@@ -237,6 +242,7 @@ pub fn run(gpa: std.mem.Allocator, app: config.App, bytes: font.Fonts.Bytes, fal
             _ = s.draw(&r);
             const t1 = now();
             w.draws.append(gpa, t1 - t0) catch {};
+            if (t0 < w.idle_until and t0 > bench.start + std.time.ns_per_s) w.idle_draws.append(gpa, t1 - t0) catch {};
             if (gl.snap.items.len > 0) {
                 saveSnap(gpa, snap_path, gl.snap.items, s.w, s.h);
                 gl.snap.clearRetainingCapacity();
@@ -373,7 +379,20 @@ fn onKey(_: ?*rl.GLFWwindow, key: c_int, scancode: c_int, action: c_int, mods: c
         .mods = keys.mods(mods),
         .unshifted = unshifted,
     };
-    if (k.action == .release) send(k) else win.pending = .{ .key = k };
+    if (k.action == .release) return send(k);
+    win.pending = .{ .key = k };
+    // Option as Alt: the key's own character, as if Option were not held
+    // (Ghostty's macos-option-as-alt), so legacy encoding can send ESC x.
+    if (k.mods & c.GHOSTTY_MODS_ALT != 0 and win.app.terminal.option_as_alt and unshifted >= 0x20 and unshifted < 0x7f) {
+        const p = &win.pending.?;
+        var ch: u8 = @intCast(unshifted);
+        if (k.mods & c.GHOSTTY_MODS_SHIFT != 0 and ch >= 'a' and ch <= 'z') {
+            ch -= 32;
+            p.key.consumed |= c.GHOSTTY_MODS_SHIFT;
+        }
+        p.text[0] = ch;
+        p.key.text = p.text[0..1];
+    }
 }
 
 fn onChar(_: ?*rl.GLFWwindow, codepoint: c_uint) callconv(.c) void {
@@ -382,7 +401,7 @@ fn onChar(_: ?*rl.GLFWwindow, codepoint: c_uint) callconv(.c) void {
     if (win.pending) |*p| {
         // Option as Alt: the key goes as itself with Alt, not as the
         // character macOS composed for Option.
-        if (p.key.mods & c.GHOSTTY_MODS_ALT != 0 and win.app.terminal.option_as_alt) return;
+        if (p.key.mods & c.GHOSTTY_MODS_ALT != 0 and win.app.terminal.option_as_alt) return flushPending();
         const n = std.unicode.utf8Encode(cp, &p.text) catch return;
         p.key.text = p.text[0..n];
         if (p.key.mods & c.GHOSTTY_MODS_SHIFT != 0) p.key.consumed |= c.GHOSTTY_MODS_SHIFT;
@@ -405,6 +424,8 @@ fn onFocus(_: ?*rl.GLFWwindow, focused: c_int) callconv(.c) void {
 /// pressed through the same path a key from GLFW takes.
 const Bench = struct {
     start: u64,
+    /// Seconds on the title first, its picture shimmering, untouched.
+    delay: f64 = 0,
     next: usize = 0,
 
     const script = blk: {
@@ -416,7 +437,7 @@ const Bench = struct {
     };
 
     fn step(b: *Bench, w: *Win) void {
-        const t = @as(f64, @floatFromInt(now() - b.start)) / 1e9;
+        const t = @as(f64, @floatFromInt(now() - b.start)) / 1e9 - b.delay;
         if (b.next >= script.len) {
             if (t > script[script.len - 1][0] + 3) rl.glfwSetWindowShouldClose(rl.glfwGetCurrentContext(), 1);
             return;
@@ -477,9 +498,14 @@ fn report(gpa: std.mem.Allocator, w: *Win, s: *Session, t_main: u64, t_window: u
     if (s.first_frame_ns) |t| try o.print(", to the program's first frame {d:.1} ms", .{ms(t - base)});
     if (s.first_image_ns) |t| try o.print(", to its first picture {d:.1} ms", .{ms(t - base)});
     try o.print("\n", .{});
+    if (s.first_frame_ns) |t| try o.print("first frame at unix {d} ms, first picture at unix {d} ms (for a launcher's own clock)\n", .{ unixMs(t), unixMs(s.first_image_ns orelse t) });
     try stat(o, "key to frame (synthetic key, through GLFW's callback path, to the swap)", w.latencies.items);
     try stat(o, "key to the program's output", w.to_output.items);
-    try stat(o, "draw + present (CPU)", w.draws.items);
+    try stat(o, "draw + present (CPU), all frames", w.draws.items);
+    if (w.idle_draws.items.len > 0) {
+        try stat(o, "draw + present (CPU), the title shimmering alone", w.idle_draws.items);
+        try o.print("shimmer frames: {d} in {d:.1} s\n", .{ w.idle_draws.items.len, @as(f64, @floatFromInt(w.idle_until - w.frames.items[0])) / 1e9 });
+    }
     if (w.frames.items.len > 1) {
         var gaps: std.ArrayList(u64) = .empty;
         defer gaps.deinit(gpa);
@@ -499,6 +525,14 @@ fn report(gpa: std.mem.Allocator, w: *Win, s: *Session, t_main: u64, t_window: u
         _ = std.c.fwrite(buf.written().ptr, 1, buf.written().len, f);
         _ = std.c.fclose(f);
     }
+}
+
+/// An uptime-clock moment on the wall clock, in milliseconds.
+fn unixMs(t: u64) i64 {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.REALTIME, &ts);
+    const wall: i64 = @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+    return wall - @as(i64, @intCast((now() - t) / std.time.ns_per_ms));
 }
 
 fn stat(o: *std.Io.Writer, name: []const u8, xs: []u64) !void {
