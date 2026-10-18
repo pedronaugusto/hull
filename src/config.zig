@@ -15,6 +15,9 @@ pub const App = struct {
     program: []const []const u8 = &.{},
     /// The icon, a square PNG beside hull.zon; packaging only.
     icon: ?[]const u8 = null,
+    /// Where packaging finds the program to put inside the bundle,
+    /// relative to hull.zon; packaging only.
+    program_source: ?[]const u8 = null,
     window: Window = .{},
     terminal: Terminal = .{},
 };
@@ -37,6 +40,9 @@ pub const Window = struct {
     new_windows: bool = false,
     /// The window closes, and the app quits, when the program ends.
     quit_with_program: bool = true,
+    /// A title the program sets (OSC 0 or 2) is the window's: off, so the
+    /// window, the Dock and the menus carry the app's name alone.
+    program_title: bool = false,
     /// ⌘Q and the close button send this to the program (as the key it is)
     /// instead of quitting at once, so a game can save first; null quits.
     close_key: ?[]const u8 = null,
@@ -54,6 +60,15 @@ pub const Terminal = struct {
     font_bold: ?[]const u8 = null,
     font_italic: ?[]const u8 = null,
     font_bold_italic: ?[]const u8 = null,
+    /// Faces tried, in order, for a character the font lacks (absolute
+    /// paths, or beside hull.zon); one missing is skipped. hull has no
+    /// system font discovery yet: these stand in for it.
+    font_fallback: []const []const u8 = &.{
+        "/System/Library/Fonts/Menlo.ttc",
+        "/System/Library/Fonts/Apple Symbols.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    },
     /// Extra space between cells, in points (Ghostty's adjust-cell-*).
     adjust_cell_width: f32 = 0,
     adjust_cell_height: f32 = 0,
@@ -64,16 +79,15 @@ pub const Terminal = struct {
     foreground: ?[]const u8 = null,
     cursor_color: ?[]const u8 = null,
     palette: []const PaletteEntry = &.{},
-    /// Percent, 80 to 100: how much of the window's background is drawn.
-    /// Text and pictures are always whole; a picture's transparent ground
-    /// shows this same background.
-    background_opacity: u8 = 100,
-    /// The blur behind a translucent background, macOS only.
-    background_blur: bool = false,
     /// Space around the grid, in points; leftover pixels are shared out
     /// evenly (Ghostty's window-padding-balance).
     padding_x: u16 = 8,
     padding_y: u16 = 8,
+    /// Percent, 80 to 100: how much of the window's background is drawn,
+    /// while the window is windowed; full screen is always opaque, and the
+    /// value waits for the window's return. Text and pictures are always
+    /// whole; a picture's transparent ground shows this same background.
+    background_opacity: u8 = 100,
     cursor_style: CursorStyle = .block,
     cursor_blink: bool = false,
     /// Option as Alt on macOS (Ghostty's macos-option-as-alt).
@@ -84,9 +98,7 @@ pub const Terminal = struct {
     bold_is_bright: bool = false,
 };
 
-pub const PaletteEntry = struct { index: u8, color: []const u8 };
-
-/// The background opacity a program may ask for: 80 to 100.
+/// The background opacity there may be: 80 to 100.
 pub const opacity_min = 80;
 pub const opacity_max = 100;
 
@@ -94,15 +106,17 @@ pub fn clampOpacity(v: i64) u8 {
     return @intCast(std.math.clamp(v, opacity_min, opacity_max));
 }
 
+pub const PaletteEntry = struct { index: u8, color: []const u8 };
+
 /// Parses hull.zon. Strings live in `arena`.
 pub fn parse(gpa: std.mem.Allocator, arena: std.mem.Allocator, source: [:0]const u8) !App {
     var diag: std.zon.parse.Diagnostics = undefined;
-    var app = std.zon.parse.fromSlice(App, .{ .gpa = gpa, .arena = arena, .source = source, .diagnostics = &diag }) catch |err| {
+    var app_ = std.zon.parse.fromSlice(App, .{ .gpa = gpa, .arena = arena, .source = source, .diagnostics = &diag }) catch |err| {
         if (err == error.ParseZon) diag.log("hull.zon");
         return err;
     };
-    app.terminal.background_opacity = clampOpacity(app.terminal.background_opacity);
-    return app;
+    app_.terminal.background_opacity = clampOpacity(app_.terminal.background_opacity);
+    return app_;
 }
 
 /// The colours an app's terminal starts with: its theme with its overrides.
@@ -127,9 +141,10 @@ test "parse an app" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const app = try parse(std.testing.allocator, arena.allocator(),
-        \\.{ .name = "WAKE", .program = .{"wake"}, .terminal = .{ .background_opacity = 50 } }
+        \\.{ .name = "WAKE", .program = .{"wake"}, .terminal = .{ .font_size = 16, .background_opacity = 50 } }
     );
     try std.testing.expectEqualStrings("WAKE", app.name);
+    try std.testing.expectEqual(@as(f32, 16), app.terminal.font_size);
     try std.testing.expectEqual(@as(u8, 80), app.terminal.background_opacity);
     try std.testing.expect(!app.window.tabs);
 }

@@ -30,6 +30,13 @@ pub fn build(b: *std.Build) void {
     vt_h.addIncludePath(vt_out.path(b, "include"));
     vt_h.defineCMacro("GHOSTTY_STATIC", null);
 
+    const rl_h = b.addTranslateC(.{
+        .root_source_file = b.path("src/c/rl.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    rl_h.addIncludePath(vt_out.path(b, "include"));
+
     const zt = b.dependency("ztypeset", .{ .target = target, .optimize = optimize });
 
     const mod = b.createModule(.{
@@ -41,10 +48,15 @@ pub fn build(b: *std.Build) void {
         .link_libcpp = true,
         .imports = &.{
             .{ .name = "vt", .module = vt_h.createModule() },
+            .{ .name = "rl", .module = rl_h.createModule() },
             .{ .name = "ztypeset", .module = zt.module("ztypeset") },
         },
     });
     mod.addObjectFile(vt_out.path(b, "lib/libghostty-vt-static.a"));
+    mod.addObjectFile(vt_out.path(b, "lib/libraylib.a"));
+    if (target.result.os.tag == .macos) {
+        for ([_][]const u8{ "OpenGL", "Cocoa", "IOKit", "CoreVideo", "CoreFoundation", "CoreGraphics" }) |f| mod.linkFramework(f, .{});
+    }
     mod.addAnonymousImport("fonts", .{ .root_source_file = b.path("fonts/fonts.zig") });
     const exe = b.addExecutable(.{ .name = "hull", .root_module = mod });
     b.installArtifact(exe);

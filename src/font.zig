@@ -23,6 +23,10 @@ pub const Fonts = struct {
     lib: zt.Library,
     font: [4]zt.Font,
     face: [4]zt.Face,
+    /// Faces for what the four lack, in order.
+    fallback: [8]zt.Font = undefined,
+    fallback_face: [8]zt.Face = undefined,
+    fallbacks: usize = 0,
     /// The cell, device pixels.
     cell_w: u32,
     cell_h: u32,
@@ -38,13 +42,23 @@ pub const Fonts = struct {
 
     /// The faces at `px` device pixels to the em, `adjust` pixels added to
     /// the cell each way.
-    pub fn init(gpa: std.mem.Allocator, bytes: Bytes, px: f32, adjust_w: f32, adjust_h: f32) !Fonts {
+    pub fn init(gpa: std.mem.Allocator, bytes: Bytes, fallback: []const []const u8, px: f32, adjust_w: f32, adjust_h: f32) !Fonts {
         const lib = try zt.Library.init();
         errdefer lib.deinit();
         var f: Fonts = .{ .gpa = gpa, .lib = lib, .font = undefined, .face = undefined, .cell_w = 0, .cell_h = 0, .baseline = 0, .underline_pos = 0, .underline_thick = 1 };
         for (0..4) |i| {
             f.font[i] = try lib.createFont(bytes[i], 0);
             f.face[i] = try f.font[i].face(0, px);
+        }
+        for (fallback) |fb| {
+            if (f.fallbacks == f.fallback.len) break;
+            const ff = lib.createFont(fb, 0) catch continue;
+            f.fallback[f.fallbacks] = ff;
+            f.fallback_face[f.fallbacks] = ff.face(0, px) catch {
+                ff.deinit();
+                continue;
+            };
+            f.fallbacks += 1;
         }
         const m = try f.face[0].metrics();
         const gid = f.font[0].glyphIndex('M');
@@ -64,6 +78,10 @@ pub const Fonts = struct {
 
     pub fn deinit(f: *Fonts) void {
         f.scratch.deinit(f.gpa);
+        for (0..f.fallbacks) |i| {
+            f.fallback_face[i].deinit();
+            f.fallback[i].deinit();
+        }
         for (0..4) |i| {
             f.face[i].deinit();
             f.font[i].deinit();
@@ -80,8 +98,16 @@ pub const Fonts = struct {
             i = 0;
             gid = f.font[0].glyphIndex(cp);
         }
+        var face = f.face[i];
+        if (gid == 0) for (0..f.fallbacks) |j| {
+            gid = f.fallback[j].glyphIndex(cp);
+            if (gid != 0) {
+                face = f.fallback_face[j];
+                break;
+            }
+        };
         if (gid == 0) return null;
-        const bm = f.face[i].renderGlyph(gid, .a8, .light, 0, 0) catch return null;
+        const bm = face.renderGlyph(gid, .a8, .light, 0, 0) catch return null;
         f.scratch.resize(f.gpa, bm.width * bm.height) catch return null;
         const px = f.scratch.items;
         if (bm.pixels) |src| {
@@ -95,7 +121,7 @@ pub const Fonts = struct {
 };
 
 test "the cell of JetBrains Mono at 28 px" {
-    var f = try Fonts.init(std.testing.allocator, Fonts.default_bytes, 28, 0, 0);
+    var f = try Fonts.init(std.testing.allocator, Fonts.default_bytes, &.{}, 28, 0, 0);
     defer f.deinit();
     try std.testing.expectEqual(@as(u32, 17), f.cell_w);
     try std.testing.expect(f.cell_h >= 34 and f.cell_h <= 38);

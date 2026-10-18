@@ -54,14 +54,14 @@ pub const Session = struct {
 
     /// A session for `app` at `scale` device pixels per point, its window
     /// `cols`×`rows` cells. The program is not started yet.
-    pub fn init(s: *Session, gpa: std.mem.Allocator, app: config.App, font_bytes: font.Fonts.Bytes, scale: f32) !void {
+    pub fn init(s: *Session, gpa: std.mem.Allocator, app: config.App, font_bytes: font.Fonts.Bytes, fallback: []const []const u8, scale: f32) !void {
         const t = app.terminal;
         const th = try config.colors(t);
         s.* = .{
             .gpa = gpa,
             .arena = .init(gpa),
             .app = app,
-            .fonts = try font.Fonts.init(gpa, font_bytes, t.font_size * scale, t.adjust_cell_width * scale, t.adjust_cell_height * scale),
+            .fonts = try font.Fonts.init(gpa, font_bytes, fallback, t.font_size * scale, t.adjust_cell_width * scale, t.adjust_cell_height * scale),
             .vt = undefined,
             .scale = scale,
             .layout = undefined,
@@ -116,8 +116,6 @@ pub const Session = struct {
             "HULL=" ++ vt_mod.version,
             try std.fmt.allocPrint(a, "HULL_APP={s}", .{s.app.id}),
             try std.fmt.allocPrint(a, "HULL_THEME={s}", .{t.theme}),
-            try std.fmt.allocPrint(a, "HULL_BACKGROUND_OPACITY={d}", .{s.vt.opacity}),
-            std.fmt.comptimePrint("HULL_BACKGROUND_OPACITY_RANGE={d}-{d}", .{ config.opacity_min, config.opacity_max }),
         });
         if (parent_env.get("LANG") == null) try env.append(a, "LANG=en_US.UTF-8");
         s.pty = try Pty.spawn(a, argv, env.items, cwd, s.winsize());

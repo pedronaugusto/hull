@@ -3,7 +3,7 @@
 //!     hull [--app DIR] [options] [-- program args...]
 //!
 //!     --app DIR          the app's hull.zon (in an .app: Contents/Resources)
-//!     --opacity N        background opacity, 80..100 (the app's otherwise)
+//!     --opacity N        background opacity while windowed, 80..100
 //!     --theme NAME       a theme hull knows (rose-pine by default)
 //!     --headless OUT     no window: write the frame at --at as a PNG
 //!     --at SECONDS       when the headless frame is taken (default 3)
@@ -11,7 +11,6 @@
 //!     --keys T:K,...     headless keys at seconds: enter, right, a, ...
 //!     --scale N          headless device pixels per point (default 2)
 //!     --size COLSxROWS   the grid (the app's otherwise)
-//!     --matte checker    a headless PNG over a checkerboard, alpha shown
 //!     --bench            window: press keys itself and report latency,
 //!                        frame time, memory and startup on exit
 const std = @import("std");
@@ -20,7 +19,6 @@ const config = @import("config.zig");
 const font = @import("font.zig");
 const Session = @import("session.zig").Session;
 const headless = @import("headless.zig");
-const png = @import("png.zig");
 
 pub const std_options: std.Options = .{ .log_level = .info };
 
@@ -39,10 +37,10 @@ pub fn main(init: std.process.Init) !void {
     var keys: []const headless.Press = &.{};
     var scale: f32 = 2;
     var size: ?[2]u16 = null;
-    var matte: png.Matte = .none;
-    var opacity: ?i64 = null;
     var theme_name: ?[]const u8 = null;
     var bench = false;
+    var opacity: ?i64 = null;
+    var describe = false;
     var program: std.ArrayList([]const u8) = .empty;
     while (args.next()) |a| {
         if (std.mem.eql(u8, a, "--")) {
@@ -67,15 +65,14 @@ pub fn main(init: std.process.Init) !void {
             const v = args.next() orelse return usage();
             const x = std.mem.indexOfScalar(u8, v, 'x') orelse return usage();
             size = .{ try std.fmt.parseInt(u16, v[0..x], 10), try std.fmt.parseInt(u16, v[x + 1 ..], 10) };
-        } else if (std.mem.eql(u8, a, "--matte")) {
-            const v = args.next() orelse return usage();
-            matte = if (std.mem.eql(u8, v, "checker")) .{ .checker = 16 } else .none;
-        } else if (std.mem.eql(u8, a, "--opacity")) {
-            opacity = try std.fmt.parseInt(i64, args.next() orelse return usage(), 10);
         } else if (std.mem.eql(u8, a, "--theme")) {
             theme_name = try arena.dupe(u8, args.next() orelse return usage());
+        } else if (std.mem.eql(u8, a, "--opacity")) {
+            opacity = try std.fmt.parseInt(i64, args.next() orelse return usage(), 10);
         } else if (std.mem.eql(u8, a, "--bench")) {
             bench = true;
+        } else if (std.mem.eql(u8, a, "--describe")) {
+            describe = true;
         } else return usage();
     }
 
@@ -89,40 +86,70 @@ pub fn main(init: std.process.Init) !void {
         const src = try std.Io.Dir.cwd().readFileAllocOptions(io, path, arena, .limited(1 << 20), .of(u8), 0);
         app = try config.parse(gpa, arena, src);
     }
-    if (opacity) |o| app.terminal.background_opacity = config.clampOpacity(o);
     if (theme_name) |t| app.terminal.theme = t;
+    if (opacity) |o| app.terminal.background_opacity = config.clampOpacity(o);
     if (size) |sz| {
         app.window.cols = sz[0];
         app.window.rows = sz[1];
     }
     if (program.items.len > 0) app.program = program.items;
+    if (describe) {
+        // For tools/bundle.sh: who the app is, as shell assignments.
+        var buf: [4096]u8 = undefined;
+        var w = std.Io.File.stdout().writer(io, &buf);
+        const o = &w.interface;
+        try o.print("NAME='{s}'\nID='{s}'\nVERSION='{s}'\n", .{ app.name, app.id, app.version });
+        if (app.program.len > 0) try o.print("PROGRAM='{s}'\n", .{std.fs.path.basename(app.program[0])});
+        if (dir) |d| {
+            if (app.program_source) |p| try o.print("PROGRAM_SOURCE='{s}'\n", .{try std.fs.path.resolve(arena, &.{ d, p })});
+            if (app.icon) |p| try o.print("ICON='{s}'\n", .{try std.fs.path.resolve(arena, &.{ d, p })});
+        }
+        try o.flush();
+        return;
+    }
     if (app.program.len == 0) {
         std.log.err("no program: give one after --, or an app whose hull.zon names it", .{});
         return error.NoProgram;
     }
-    // A relative program is the bundle's (beside hull) or the app dir's.
+    // A bare program name is the bundle's (Contents/Resources/program),
+    // or beside hull, or in the app's directory.
     var argv = try arena.dupe([]const u8, app.program);
     if (!std.fs.path.isAbsolute(argv[0]) and std.mem.indexOfScalar(u8, argv[0], '/') == null) {
-        const beside = try std.fs.path.join(arena, &.{ exe_dir, argv[0] });
-        if (exists(io, beside)) argv[0] = beside else if (dir) |d| {
-            const in_app = try std.fs.path.join(arena, &.{ d, argv[0] });
-            if (exists(io, in_app)) argv[0] = in_app;
-        }
+        const places = [_][]const u8{
+            try std.fs.path.join(arena, &.{ bundled, "program", argv[0] }),
+            try std.fs.path.join(arena, &.{ exe_dir, argv[0] }),
+            if (dir) |d| try std.fs.path.join(arena, &.{ d, argv[0] }) else "",
+            // unpackaged, from the app's directory: where packaging takes it from
+            if (dir != null and app.program_source != null) try std.fs.path.resolve(arena, &.{ dir.?, app.program_source.? }) else "",
+        };
+        for (places) |p| if (p.len > 0 and exists(io, p)) {
+            argv[0] = try std.fs.path.resolve(arena, &.{ try std.process.currentPathAlloc(io, arena), p });
+            break;
+        };
     } else if (!std.fs.path.isAbsolute(argv[0])) {
         argv[0] = try std.fs.path.resolve(arena, &.{ try std.process.currentPathAlloc(io, arena), argv[0] });
     }
     const bytes = try fontBytes(io, arena, dir, app.terminal);
+    var fallback: std.ArrayList([]const u8) = .empty;
+    for (app.terminal.font_fallback) |name| {
+        const path = if (std.fs.path.isAbsolute(name)) name else if (dir) |d| try std.fs.path.join(arena, &.{ d, name }) else continue;
+        const b = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(64 << 20)) catch continue;
+        try fallback.append(arena, b);
+    }
 
     if (out) |o| {
         var s: Session = undefined;
-        try s.init(gpa, app, bytes, scale);
+        try s.init(gpa, app, bytes, fallback.items, scale);
         defer s.deinit();
         try s.spawn(argv, init.environ_map, null);
-        try headless.run(gpa, io, &s, .{ .out = o, .at = at, .also = also, .presses = keys, .matte = matte });
+        try headless.run(gpa, io, &s, .{ .out = o, .at = at, .also = also, .presses = keys });
         return;
     }
-    std.log.err("no window yet{s}; use --headless", .{if (bench) " to bench" else ""});
-    return error.Unsupported;
+    try @import("window.zig").run(gpa, app, bytes, fallback.items, argv, init.environ_map, init.environ_map.get("HOME"), .{
+        .bench = bench,
+        .bench_out = init.environ_map.get("HULL_BENCH_OUT"),
+        .snap = init.environ_map.get("HULL_SNAP"),
+    });
 }
 
 fn fontBytes(io: std.Io, arena: std.mem.Allocator, dir: ?[]const u8, t: config.Terminal) !font.Fonts.Bytes {
@@ -146,7 +173,7 @@ fn exists(io: std.Io, path: []const u8) bool {
 }
 
 fn usage() error{Usage} {
-    std.log.err("usage: hull [--app DIR] [--opacity N] [--headless OUT.png --at S --keys T:K,...] [-- program args...]", .{});
+    std.log.err("usage: hull [--app DIR] [--headless OUT.png --at S --keys T:K,...] [-- program args...]", .{});
     return error.Usage;
 }
 
@@ -157,4 +184,6 @@ test {
     _ = @import("font.zig");
     _ = @import("render.zig");
     _ = @import("cpu.zig");
+    _ = @import("keys.zig");
+    _ = @import("pngdec.zig");
 }

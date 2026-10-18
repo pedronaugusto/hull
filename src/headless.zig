@@ -18,7 +18,6 @@ pub const Options = struct {
     /// Seconds after the start the frame is taken at.
     at: f64 = 3,
     presses: []const Press = &.{},
-    matte: png.Matte = .none,
     /// Frames taken at these further moments, `out` with `-<n>` before
     /// its extension; for shimmer and timing.
     also: []const f64 = &.{},
@@ -53,7 +52,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, s: *Session, opts: Options) !void
                 const dt = @as(f64, @floatFromInt(now() - t0)) / 1e6;
                 const path = if (shot == 0 and shots.items.len == 1) opts.out else try numbered(gpa, opts.out, shot);
                 defer if (path.ptr != opts.out.ptr) gpa.free(path);
-                try save(gpa, io, cpu.canvas, opts.matte, path);
+                try save(gpa, io, cpu.canvas, path);
                 std.log.info("{s}: {d}x{d} px, {d}x{d} cells, {d} pictures, drawn in {d:.2} ms, at {d:.2} s", .{ path, s.w, s.h, s.vt.cols, s.vt.rows, st.images, dt, t });
                 shot += 1;
                 continue;
@@ -82,12 +81,12 @@ fn numbered(gpa: std.mem.Allocator, out: []const u8, n: usize) ![]const u8 {
     return std.fmt.allocPrint(gpa, "{s}-{d}{s}", .{ out[0 .. out.len - ext.len], n, ext });
 }
 
-fn save(gpa: std.mem.Allocator, io: std.Io, cv: Canvas, matte: png.Matte, path: []const u8) !void {
+fn save(gpa: std.mem.Allocator, io: std.Io, cv: Canvas, path: []const u8) !void {
     const file = try std.Io.Dir.cwd().createFile(io, path, .{});
     defer file.close(io);
     var buf: [64 * 1024]u8 = undefined;
     var w = file.writer(io, &buf);
-    try png.write(gpa, cv, matte, &w.interface);
+    try png.write(gpa, cv, &w.interface);
     try w.interface.flush();
 }
 

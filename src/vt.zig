@@ -3,12 +3,6 @@
 //! the colours hull's theme starts it with. OSC 4, 10 and 11 queries are
 //! answered by libghostty-vt from those colours; a program that sets them
 //! changes them.
-//!
-//! hull's own setting rides on an OSC of its own, 7701, read here before
-//! libghostty-vt (which ignores an OSC it does not know):
-//!
-//!     ESC ] 7701 ; background-opacity=90 ST    set (clamped to 80..100)
-//!     ESC ] 7701 ; background-opacity=? ST     ask; answered the same way
 const std = @import("std");
 pub const c = @import("vt");
 const theme_mod = @import("theme.zig");
@@ -33,14 +27,14 @@ pub const Vt = struct {
     cell_w: u32,
     cell_h: u32,
     dark: bool,
-    /// hull's background opacity, percent, 80..100.
-    opacity: u8,
-    /// Set when the program changed the opacity or the title.
-    opacity_changed: bool = false,
+    /// The background opacity drawn now, percent: the setting while
+    /// windowed, 100 in full screen.
+    opacity: u8 = 100,
+    /// Set when the program changed its title.
     title_changed: bool = false,
-    scan: Scan = .{},
 
     pub fn init(v: *Vt, cols: u16, rows: u16, cell_w: u32, cell_h: u32, th: theme_mod.Theme, term_cfg: config.Terminal) !void {
+        installPng();
         v.* = .{ .cols = cols, .rows = rows, .cell_w = cell_w, .cell_h = cell_h, .dark = th.dark, .opacity = term_cfg.background_opacity };
         try ok(c.ghostty_terminal_new(null, &v.term, cols, rows));
         errdefer v.deinit();
@@ -112,7 +106,6 @@ pub const Vt = struct {
 
     /// The program's output, into the terminal.
     pub fn feed(v: *Vt, bytes: []const u8) void {
-        v.scan.feed(v, bytes);
         c.ghostty_terminal_vt_write(v.term, bytes.ptr, bytes.len);
     }
 
@@ -175,20 +168,6 @@ pub const Vt = struct {
         if (v.pty) |p| p.write(bytes);
     }
 
-    fn setOpacity(v: *Vt, value: []const u8) void {
-        if (std.mem.eql(u8, value, "?")) {
-            var buf: [64]u8 = undefined;
-            const s = std.fmt.bufPrint(&buf, "\x1b]7701;background-opacity={d}\x1b\\", .{v.opacity}) catch return;
-            v.reply(s);
-            return;
-        }
-        const n = std.fmt.parseInt(i64, value, 10) catch return;
-        const next = config.clampOpacity(n);
-        if (next != v.opacity) {
-            v.opacity = next;
-            v.opacity_changed = true;
-        }
-    }
 };
 
 /// One key as the platform saw it, for `Vt.encodeKey`.
@@ -206,56 +185,26 @@ pub const Key = struct {
     pub const Action = enum(c_uint) { release = 0, press = 1, repeat = 2 };
 };
 
-/// Finds `ESC ] 7701 ; key=value (BEL | ESC \)` in output however it is
-/// split across reads.
-const Scan = struct {
-    state: enum { ground, esc, osc_num, payload, payload_esc } = .ground,
-    num: u32 = 0,
-    buf: [64]u8 = undefined,
-    len: usize = 0,
+var png_installed = false;
 
-    fn feed(s: *Scan, v: *Vt, bytes: []const u8) void {
-        for (bytes) |b| switch (s.state) {
-            .ground => if (b == 0x1b) {
-                s.state = .esc;
-            },
-            .esc => if (b == ']') {
-                s.state = .osc_num;
-                s.num = 0;
-            } else {
-                s.state = if (b == 0x1b) .esc else .ground;
-            },
-            .osc_num => if (b >= '0' and b <= '9') {
-                s.num = s.num *| 10 +| (b - '0');
-            } else if (b == ';' and s.num == 7701) {
-                s.state = .payload;
-                s.len = 0;
-            } else {
-                s.state = if (b == 0x1b) .esc else .ground;
-            },
-            .payload => if (b == 0x07) {
-                s.done(v);
-            } else if (b == 0x1b) {
-                s.state = .payload_esc;
-            } else if (s.len < s.buf.len) {
-                s.buf[s.len] = b;
-                s.len += 1;
-            } else {
-                s.state = .ground;
-            },
-            .payload_esc => if (b == '\\') s.done(v) else {
-                s.state = .esc;
-            },
-        };
-    }
+/// PNG pictures (`f=100`): libghostty-vt built as a C library has no
+/// decoder and takes the embedder's, process-wide.
+fn installPng() void {
+    if (png_installed) return;
+    png_installed = true;
+    _ = c.ghostty_sys_set(c.GHOSTTY_SYS_OPT_DECODE_PNG, @ptrCast(&decodePng));
+}
 
-    fn done(s: *Scan, v: *Vt) void {
-        s.state = .ground;
-        const p = s.buf[0..s.len];
-        const eq = std.mem.indexOfScalar(u8, p, '=') orelse return;
-        if (std.mem.eql(u8, p[0..eq], "background-opacity")) v.setOpacity(p[eq + 1 ..]);
-    }
-};
+fn decodePng(_: ?*anyopaque, allocator: [*c]const c.GhosttyAllocator, data: [*c]const u8, len: usize, out: [*c]c.GhosttySysImage) callconv(.c) bool {
+    const gpa = std.heap.c_allocator;
+    const img = @import("pngdec.zig").decode(gpa, data[0..len]) catch return false;
+    defer gpa.free(img.rgba);
+    const buf = c.ghostty_alloc(allocator, img.rgba.len);
+    if (buf == null) return false;
+    @memcpy(buf[0..img.rgba.len], img.rgba);
+    out.* = .{ .width = img.w, .height = img.h, .data = buf, .data_len = img.rgba.len };
+    return true;
+}
 
 fn ok(r: c.GhosttyResult) !void {
     if (r != c.GHOSTTY_SUCCESS) return error.Ghostty;
@@ -307,14 +256,3 @@ fn titleChanged(_: c.GhosttyTerminal, ud: ?*anyopaque) callconv(.c) void {
     self(ud).title_changed = true;
 }
 
-test "the opacity OSC, split across writes, set and clamped" {
-    var v: Vt = undefined;
-    try v.init(10, 4, 8, 16, theme_mod.rose_pine, .{});
-    defer v.deinit();
-    v.feed("\x1b]77");
-    v.feed("01;background-opacity=9");
-    v.feed("0\x1b\\");
-    try std.testing.expectEqual(@as(u8, 90), v.opacity);
-    v.feed("\x1b]7701;background-opacity=10\x07");
-    try std.testing.expectEqual(@as(u8, 80), v.opacity);
-}

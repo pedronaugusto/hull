@@ -42,7 +42,8 @@ pub const Backend = struct {
         begin: *const fn (*anyopaque, w: u32, h: u32, ground: Color) void,
         /// Coverage pixels into the atlas at `r` (row-major, `r.w` wide).
         atlas: *const fn (*anyopaque, r: Rect, pixels: []const u8) void,
-        /// RGBA pixels, straight alpha, as the image `key`.
+        /// RGBA pixels, straight alpha, as the image `key`: new, or new
+        /// pixels for it (the same size reuses what holds the old ones).
         image: *const fn (*anyopaque, key: u64, w: u32, h: u32, rgba: []const u8) void,
         /// The image `key` is no longer needed.
         drop: *const fn (*anyopaque, key: u64) void,
@@ -77,7 +78,7 @@ pub const Stats = struct {
 };
 
 const Slot = struct { x: u16, y: u16, w: u16, h: u16, left: i16, top: i16, missing: bool = false };
-const Image = struct { seen: u64 };
+const Image = struct { seen: u64, generation: u64 };
 
 /// The frame's walker and what it keeps between frames: the atlas's
 /// packing and glyphs, and which images the backend holds.
@@ -232,7 +233,7 @@ pub const Renderer = struct {
         var drop: [16]u64 = undefined;
         var nd: usize = 0;
         var ii = r.images.iterator();
-        while (ii.next()) |e| if (e.value_ptr.seen + 120 < r.frame and nd < drop.len) {
+        while (ii.next()) |e| if (e.value_ptr.seen + 2 < r.frame and nd < drop.len) {
             drop[nd] = e.key_ptr.*;
             nd += 1;
         };
@@ -350,13 +351,17 @@ pub const Renderer = struct {
             info.size = @sizeOf(c.GhosttyKittyGraphicsPlacementRenderInfo);
             if (c.ghostty_kitty_graphics_placement_render_info(it, img, v.term, &info) != c.GHOSTTY_SUCCESS) continue;
             if (!info.viewport_visible or info.pixel_width == 0 or info.pixel_height == 0) continue;
-            // The image's generation names its content: new pixels, a new key.
+            // The image's generation names its content: a new one, new pixels
+            // for the same image.
             var gen: u64 = 0;
             _ = c.ghostty_kitty_graphics_image_get(img, c.GHOSTTY_KITTY_IMAGE_DATA_GENERATION, &gen);
-            const key = gen;
+            const key: u64 = id;
             if (r.images.getPtr(key)) |e| {
                 e.seen = r.frame;
-            } else if (!r.upload(img, key, stats)) continue;
+                if (e.generation != gen) {
+                    if (!r.upload(img, key, gen, stats)) continue;
+                }
+            } else if (!r.upload(img, key, gen, stats)) continue;
             var xo: u32 = 0;
             var yo: u32 = 0;
             _ = c.ghostty_kitty_graphics_placement_get(it, c.GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_X_OFFSET, &xo);
@@ -371,7 +376,7 @@ pub const Renderer = struct {
         }
     }
 
-    fn upload(r: *Renderer, img: c.GhosttyKittyGraphicsImage, key: u64, stats: *Stats) bool {
+    fn upload(r: *Renderer, img: c.GhosttyKittyGraphicsImage, key: u64, generation: u64, stats: *Stats) bool {
         var iw: u32 = 0;
         var ih: u32 = 0;
         var fmt: c.GhosttyKittyImageFormat = c.GHOSTTY_KITTY_IMAGE_FORMAT_RGBA;
@@ -407,7 +412,7 @@ pub const Renderer = struct {
             break :blk out;
         };
         r.backend.vtable.image(r.backend.ptr, key, iw, ih, rgba);
-        r.images.put(r.gpa, key, .{ .seen = r.frame }) catch return false;
+        r.images.put(r.gpa, key, .{ .seen = r.frame, .generation = generation }) catch return false;
         stats.uploads += 1;
         stats.upload_bytes += rgba.len;
         return true;

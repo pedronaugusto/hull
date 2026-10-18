@@ -1,42 +1,24 @@
-//! A canvas as a PNG: RGBA with its alpha, so a translucent background
-//! is translucent in the file, or over a matte to see it as a desktop would.
+//! A canvas as a PNG, RGBA.
 const std = @import("std");
 const Canvas = @import("cpu.zig").Canvas;
 
-pub const Matte = union(enum) {
-    /// Keep the alpha.
-    none,
-    /// Over a checkerboard of `size` pixels, as image editors show alpha.
-    checker: u32,
-};
-
-pub fn write(gpa: std.mem.Allocator, cv: Canvas, matte: Matte, out: *std.Io.Writer) !void {
+pub fn write(gpa: std.mem.Allocator, cv: Canvas, out: *std.Io.Writer) !void {
     var raw: std.ArrayList(u8) = .empty;
     defer raw.deinit(gpa);
     try raw.ensureTotalCapacity(gpa, (cv.w * 4 + 1) * cv.h);
     var y: u32 = 0;
     while (y < cv.h) : (y += 1) {
         raw.appendAssumeCapacity(0);
-        for (cv.px[y * cv.w ..][0..cv.w], 0..) |p, x| {
-            var a: u32 = p >> 24;
+        for (cv.px[y * cv.w ..][0..cv.w]) |p| {
+            const a: u32 = p >> 24;
             var r: u32 = (p >> 16) & 0xff;
             var g: u32 = (p >> 8) & 0xff;
             var b: u32 = p & 0xff;
-            switch (matte) {
-                .none => if (a != 0 and a != 255) {
-                    r = @min(255, (r * 255 + a / 2) / a);
-                    g = @min(255, (g * 255 + a / 2) / a);
-                    b = @min(255, (b * 255 + a / 2) / a);
-                },
-                .checker => |s| {
-                    const light = ((x / s) + (y / s)) % 2 == 0;
-                    const m: u32 = if (light) 0xd8 else 0x9a;
-                    const inv = 255 - a;
-                    r += (m * inv + 127) / 255;
-                    g += (m * inv + 127) / 255;
-                    b += (m * inv + 127) / 255;
-                    a = 255;
-                },
+            // premultiplied in the canvas, straight in the file
+            if (a != 0 and a != 255) {
+                r = @min(255, (r * 255 + a / 2) / a);
+                g = @min(255, (g * 255 + a / 2) / a);
+                b = @min(255, (b * 255 + a / 2) / a);
             }
             raw.appendSliceAssumeCapacity(&.{ @intCast(@min(r, 255)), @intCast(@min(g, 255)), @intCast(@min(b, 255)), @intCast(a) });
         }
