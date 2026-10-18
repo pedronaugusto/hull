@@ -1,35 +1,53 @@
 # hull
 
-A terminal program of the family in a window of its own, as a native app: the program runs unchanged on a
-pty, libghostty-vt keeps its terminal, and hull draws that terminal in a window that carries the app's name.
-This is the **spike**: it proves the route on WAKE so the package can be designed from facts.
+Any terminal program in a native window of its own, shipped as an app: the program runs unchanged on a pty,
+libghostty-vt keeps its terminal, and hull draws that terminal in a window that carries the app's name, never
+hull's. One program per window; the app sets everything, nothing comes from the player's terminal. On Windows it
+is how a terminal program ships at all. Private, MIT, public from its first release.
+
+## An app from its own build
+
+The app's repository carries its `hull.zon` and icon; its build makes the app:
+
+```zig
+const hull = @import("hull");
+
+const app = hull.addApp(b, b.dependency("hull", .{ .target = target, .optimize = optimize }), .{
+    .program = exe,                       // the program, unchanged
+    .config = b.path("app/hull.zon"),     // who it is, its window, its terminal
+    .icon = b.path("app/icon.png"),       // square, 1024 px
+});
+b.step("app", "Package the program as an app").dependOn(app.step);
+```
+
+`zig build app` puts `<name>.app` in `zig-out/app` on macOS: hull's runner as `Contents/MacOS/<name>`, the
+program in `Contents/Resources/program`, its `hull.zon` beside, an `.icns` of the icon, ad-hoc signed. Elsewhere
+the same layout in a folder of the app's name, until each platform's installer is made.
 
 ## Running it
 
 ```sh
-export PATH="$HOME/.local/share/bay/zig/0.17.0:$PATH"
-zig build                                   # hull; first build also fetches Zig 0.16.0 for libs/
-zig build test                              # the units, hull-protocol's among them
-zig build app                               # zig-out/app/WAKE.app from apps/wake/hull.zon
-open zig-out/app/WAKE.app
-./zig-out/bin/hull --app apps/wake          # the same, unpackaged
+bay test                                    # the gate: format, lint, fuzz targets, units, an example app packaged
+zig build                                   # the runner (zig-out/bin/hull) and the bundler
+./zig-out/bin/hull --app DIR                # an app's hull.zon in DIR, unpackaged
 ./zig-out/bin/hull -- /bin/zsh              # any program, hull's defaults
-tools/look.sh hide-and-seek                 # shots/hide-and-seek.png, headless
-./zig-out/bin/hull --app apps/wake --headless out.png --at 6.5 --keys 1.5:enter,3.5:enter
-./zig-out/bin/hull --app apps/wake --bench  # presses keys itself; latency, frame time, memory, startup
-HULL_SNAP=/tmp/f.png@3 ./zig-out/bin/hull --app apps/wake   # the window's own GL frame, read back
+./zig-out/bin/hull --app DIR --headless out.png --at 6.5 --keys 1.5:enter,3.5:enter   # a frame, no display
+HULL_SNAP=/tmp/f.png@3 ./zig-out/bin/hull --app DIR    # the window's own frame, read back
+HULL_DIAG=1 ./zig-out/bin/hull --app DIR    # memory every two seconds, and the frame and key times at the end
 ```
 
 ## Layout
 
-- `src/vt.zig`: libghostty-vt through its C API: the effects that answer the program, the theme as defaults.
-- `src/render.zig`: the frame as draws against a narrow backend: glyph atlas upload, image upload, rects, quads,
-  present. `src/gl.zig` is that backend on raylib (OpenGL); `src/cpu.zig` the same on the CPU, for PNGs.
-- `src/font.zig`: ztypeset faces, the cell, glyph rasters; `src/window.zig`: raylib's window, GLFW's keys.
+- `src/vt.zig`: libghostty-vt through its C API, from Ghostty's zig-0.17 branch, as the family takes it until the
+  port merges: the effects that answer the program, the theme as defaults, PNG pictures decoded by `pngdec.zig`
+  (the program's bytes, untrusted and bounded).
+- `src/render.zig`: a frame as draws against a narrow backend (glyph atlas, images, rects, quads, present);
+  `gpu.zig` is that backend on SDL3's renderer (Metal on macOS, Direct3D on Windows, Vulkan on Linux), `cpu.zig`
+  the same on the CPU, for PNGs.
+- `src/window.zig`: SDL3's window and its events; `keys.zig` its keys as libghostty's.
+- `src/font.zig`: ztypeset faces, the cell, glyph rasters.
 - `src/settings.zig` and `protocol/hull_protocol.zig`: hull's settings and the channel a program sees them on.
-- `libs/`: libghostty-vt (the family's ghostty pin) and raylib 6.0, built as static C libraries by Zig 0.16.0,
-  the Zig their pins need; hull is Zig 0.17.0 and links them. `tools/zig16.sh` fetches that Zig, checked.
-- `apps/wake/hull.zon`: WAKE as an app: name, id, version, icon, program, window policy, terminal.
+- `tools/bundle.zig`: the bundler `addApp` runs; `examples/hello`: an app as a program's build makes one.
 
 ## An app's hull.zon
 
@@ -37,7 +55,7 @@ The app sets everything; nothing is read from the user's terminal configuration.
 
 | hull.zon | Ghostty's setting it stands for |
 |---|---|
-| `name`, `id`, `version`, `icon` | (the bundle: CFBundleName/DisplayName/Executable, identifier, icon) |
+| `name`, `id`, `version` | (the bundle: CFBundleName/DisplayName/Executable, identifier, version) |
 | `window.cols`, `.rows`, `.min_cols`, `.min_rows`, `.resizable` | `window-width`, `window-height`, resizing |
 | `window.tabs`, `.new_windows` (both off) | tabs and `⌘N`; one program per window |
 | `window.program_title` (off) | `title`: a title the program sets is ignored; the window says the app's name |
