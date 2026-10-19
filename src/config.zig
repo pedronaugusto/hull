@@ -67,8 +67,11 @@ pub const Terminal = struct {
     /// Extra space between cells, in points (Ghostty's adjust-cell-*).
     adjust_cell_width: f32 = 0,
     adjust_cell_height: f32 = 0,
-    /// A theme hull knows by name (theme.zig): rose-pine by default.
+    /// A theme hull knows by name (theme.zig), any of Ghostty's: rose-pine by default.
     theme: []const u8 = "rose-pine",
+    /// The app's short list of themes, which its settings page offers first, in this order; every other one of
+    /// Ghostty's follows. A name hull does not know is refused when the app is packaged.
+    featured_themes: []const []const u8 = &.{ "rose-pine", "rose-pine-moon", "rose-pine-dawn" },
     /// Overrides of the theme: "#rrggbb".
     background: ?[]const u8 = null,
     foreground: ?[]const u8 = null,
@@ -111,6 +114,10 @@ pub fn parse(gpa: std.mem.Allocator, arena: std.mem.Allocator, source: [:0]const
         return err;
     };
     app_.terminal.background_opacity = clampOpacity(app_.terminal.background_opacity);
+    for ([_][]const []const u8{ &.{app_.terminal.theme}, app_.terminal.featured_themes }) |names| for (names) |n| if (theme.byName(n) == null) {
+        std.log.err("hull.zon: no theme is named '{s}': Ghostty's names, lower case, words joined by '-'", .{n});
+        return error.UnknownTheme;
+    };
     return app_;
 }
 

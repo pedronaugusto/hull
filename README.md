@@ -69,6 +69,7 @@ The app sets everything; nothing is read from the user's terminal configuration.
 | `terminal.font_fallback` | (system fallback; hull has no font discovery yet) |
 | `terminal.adjust_cell_width`, `adjust_cell_height` | `adjust-cell-width`, `adjust-cell-height` |
 | `terminal.theme`, `background`, `foreground`, `cursor_color`, `palette` | `theme`, `background`, `foreground`, `cursor-color`, `palette` |
+| `terminal.featured_themes` (Rosé Pine's three) | (the themes a settings page offers first) |
 | `terminal.background_opacity` (80..100, windowed only) | `background-opacity` |
 | `terminal.padding_x`, `padding_y` (always balanced) | `window-padding-x/-y`, `window-padding-balance` |
 | `terminal.cursor_style`, `cursor_blink` | `cursor-style`, `cursor-style-blink` |
@@ -86,7 +87,9 @@ default and value, hull's words, `available` and `reason`), `set`, `changed` (an
 availability included), `refused` (hull's words for why) and `get`. A program takes it as
 `b.dependency("hull", .{ .runner = false, ... }).module("hull-protocol")`: std and strand only, and none of
 hull's window is fetched.
-hull's settings: `theme`, `background_opacity` (unavailable in full screen, value kept), `font_size`,
+The themes are Ghostty's, every one it ships, read at build time from the release Ghostty's own build pins and
+named as Ghostty names them in lower case (`Rose Pine Dawn` is `rose-pine-dawn`); a name hull does not know fails
+the app's build. hull's settings: `theme`, `background_opacity` (unavailable in full screen, value kept), `font_size`,
 `padding`, `fullscreen`. Chosen values are kept in `~/Library/Application Support/<id>/hull-settings.json`.
 A theme change also reaches the program the standard way: new OSC 4/10/11 defaults and, under mode 2031,
 `CSI ? 997 ; 1|2 n`.

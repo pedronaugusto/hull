@@ -33,6 +33,12 @@
             .hash = "ghostty-1.3.2-dev-5UdBC-lZeAVJbemF7Fz8y5ApP0uA6wTc2uzECn3c6Z_Y",
             .lazy = true,
         },
+        // Ghostty's themes, every one it ships, from the release Ghostty's build pins (iTerm2-Color-Schemes)
+        .ghostty_themes = .{
+            .url = "https://deps.files.ghostty.org/ghostty-themes-release-20260921-150923-0b55a9e.tgz",
+            .hash = "N-V-__8AAM94BAAFk_hn4UW0x_OBD2g0vOwexeAAyWNNo4eB",
+            .lazy = true,
+        },
     },
     .dev_dependencies = .{
         .preflight = .{

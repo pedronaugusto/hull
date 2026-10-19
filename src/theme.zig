@@ -1,6 +1,11 @@
 //! Themes hull knows by name: the terminal's default colours, which the
 //! program reads back with OSC 4, 10 and 11 and may replace with the same.
+//! They are Ghostty's own, every one it ships (iTerm2-Color-Schemes), read
+//! from the same pinned folder when hull is built (`tools/themes.zig`), so a
+//! theme is named as in Ghostty and has its colours: Rosé Pine first, hull's
+//! default, then the rest by name.
 const std = @import("std");
+const ghostty = @import("ghostty_themes");
 
 pub const Rgb = struct {
     r: u8,
@@ -15,7 +20,10 @@ pub const Rgb = struct {
 };
 
 pub const Theme = struct {
+    /// As hull's settings and hull.zon name it: `rose-pine-dawn`.
     name: []const u8,
+    /// As Ghostty names it, which hull's settings show: `Rose Pine Dawn`.
+    label: []const u8,
     background: Rgb,
     foreground: Rgb,
     cursor: Rgb,
@@ -37,54 +45,42 @@ pub const Theme = struct {
     }
 };
 
-fn h(comptime s: []const u8) Rgb {
-    return Rgb.hex(s);
+/// Every theme, in the order a settings page shows them.
+pub const all: [ghostty.all.len]Theme = blk: {
+    @setEvalBranchQuota(1_000_000);
+    var list: [ghostty.all.len]Theme = undefined;
+    for (&list, ghostty.all) |*t, e| {
+        var ansi: [16]Rgb = undefined;
+        for (&ansi, e.ansi) |*o, c| o.* = of(c);
+        t.* = .{ .name = e.name, .label = e.label, .background = of(e.background), .foreground = of(e.foreground), .cursor = of(e.cursor), .ansi = ansi, .dark = dark(of(e.background)) };
+    }
+    const done = list;
+    break :blk done;
+};
+
+/// hull's default.
+pub const rose_pine: *const Theme = &all[0];
+
+fn of(c: u24) Rgb {
+    return .{ .r = @truncate(c >> 16), .g = @truncate(c >> 8), .b = @truncate(c) };
 }
 
-/// Rosé Pine, hull's default: rosepinetheme.com's terminal palette.
-pub const rose_pine: Theme = .{
-    .name = "rose-pine",
-    .background = h("#191724"),
-    .foreground = h("#e0def4"),
-    .cursor = h("#e0def4"),
-    .ansi = .{
-        h("#26233a"), h("#eb6f92"), h("#31748f"), h("#f6c177"), h("#9ccfd8"), h("#c4a7e7"), h("#ebbcba"), h("#e0def4"),
-        h("#6e6a86"), h("#eb6f92"), h("#31748f"), h("#f6c177"), h("#9ccfd8"), h("#c4a7e7"), h("#ebbcba"), h("#e0def4"),
-    },
-    .dark = true,
-};
-
-/// Rosé Pine Moon.
-pub const rose_pine_moon: Theme = .{
-    .name = "rose-pine-moon",
-    .background = h("#232136"),
-    .foreground = h("#e0def4"),
-    .cursor = h("#e0def4"),
-    .ansi = .{
-        h("#393552"), h("#eb6f92"), h("#3e8fb0"), h("#f6c177"), h("#9ccfd8"), h("#c4a7e7"), h("#ea9a97"), h("#e0def4"),
-        h("#6e6a86"), h("#eb6f92"), h("#3e8fb0"), h("#f6c177"), h("#9ccfd8"), h("#c4a7e7"), h("#ea9a97"), h("#e0def4"),
-    },
-    .dark = true,
-};
-
-/// Rosé Pine Dawn, the light one.
-pub const rose_pine_dawn: Theme = .{
-    .name = "rose-pine-dawn",
-    .background = h("#faf4ed"),
-    .foreground = h("#575279"),
-    .cursor = h("#575279"),
-    .ansi = .{
-        h("#f2e9e1"), h("#b4637a"), h("#286983"), h("#ea9d34"), h("#56949f"), h("#907aa9"), h("#d7827e"), h("#575279"),
-        h("#9893a5"), h("#b4637a"), h("#286983"), h("#ea9d34"), h("#56949f"), h("#907aa9"), h("#d7827e"), h("#575279"),
-    },
-    .dark = false,
-};
-
-pub const all = [_]*const Theme{ &rose_pine, &rose_pine_moon, &rose_pine_dawn };
+// A dark theme is one whose background is darker than middle grey.
+fn dark(c: Rgb) bool {
+    return 2126 * @as(u32, c.r) + 7152 * @as(u32, c.g) + 722 * @as(u32, c.b) < 10000 * 255 / 2;
+}
 
 pub fn byName(name: []const u8) ?*const Theme {
-    for (all) |t| if (std.mem.eql(u8, t.name, name)) return t;
+    for (&all) |*t| if (std.mem.eql(u8, t.name, name)) return t;
     return null;
+}
+
+test "Ghostty's themes, Rosé Pine first, each found by its name" {
+    try std.testing.expectEqualStrings("rose-pine", rose_pine.name);
+    try std.testing.expectEqualStrings("Rose Pine Dawn", byName("rose-pine-dawn").?.label);
+    try std.testing.expect(!byName("rose-pine-dawn").?.dark);
+    try std.testing.expect(byName("catppuccin-mocha").?.dark);
+    try std.testing.expect(all.len > 100);
 }
 
 test "palette keeps the theme's sixteen and xterm's cube" {

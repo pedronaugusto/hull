@@ -34,11 +34,19 @@ pub const words = struct {
             else => "hull could not apply that",
         };
     }
-    pub const themes = [_]hp.Choice{
-        .{ .name = "rose-pine", .label = "Rosé Pine" },
-        .{ .name = "rose-pine-moon", .label = "Rosé Pine Moon" },
-        .{ .name = "rose-pine-dawn", .label = "Rosé Pine Dawn" },
-    };
+    /// Every theme, by its name and Ghostty's words for it: the app's short list first, then the rest.
+    pub fn themes(a: std.mem.Allocator, featured: []const []const u8) !struct { []const hp.Choice, u32 } {
+        const table = &@import("theme.zig").all;
+        var list: std.ArrayList(hp.Choice) = try .initCapacity(a, table.len);
+        for (featured) |name| if (@import("theme.zig").byName(name)) |t| if (!has(list.items, t.name)) list.appendAssumeCapacity(.{ .name = t.name, .label = t.label });
+        const first: u32 = @intCast(list.items.len); // safe: below the table's few hundred
+        for (table) |*t| if (!has(list.items[0..first], t.name)) list.appendAssumeCapacity(.{ .name = t.name, .label = t.label });
+        return .{ list.items, first };
+    }
+    fn has(list: []const hp.Choice, name: []const u8) bool {
+        for (list) |c| if (std.mem.eql(u8, c.name, name)) return true;
+        return false;
+    }
 };
 
 /// What the player chose, as kept between runs; a field left out is the
@@ -70,6 +78,8 @@ pub const Settings = struct {
     path: ?[]const u8 = null,
     lines: hp.Lines = .{},
     scratch: std.ArrayList(u8) = .empty,
+    /// What the channel would not take yet, whole lines, sent as the program reads.
+    outbox: std.ArrayList(u8) = .empty,
     arena: std.heap.ArenaAllocator,
 
     pub fn init(gpa: std.mem.Allocator, t: config.Terminal) Settings {
@@ -87,6 +97,7 @@ pub const Settings = struct {
     pub fn deinit(st: *Settings) void {
         st.lines.deinit(st.gpa);
         st.scratch.deinit(st.gpa);
+        st.outbox.deinit(st.gpa);
         st.arena.deinit();
     }
 
@@ -142,7 +153,8 @@ pub const Settings = struct {
             }
         }.f;
         const out = try a.alloc(hp.Setting, 5);
-        out[0] = .{ .name = "theme", .kind = .choice, .label = words.theme, .values = &words.themes, .default = .{ .string = st.defaults.theme }, .value = .{ .string = st.theme } };
+        const themes, const featured = try words.themes(a, st.defaults.featured_themes);
+        out[0] = .{ .name = "theme", .kind = .choice, .label = words.theme, .values = themes, .featured = featured, .default = .{ .string = st.defaults.theme }, .value = .{ .string = st.theme } };
         out[1] = .{
             .name = "background_opacity",
             .kind = .integer,
@@ -182,23 +194,38 @@ pub const Settings = struct {
         st.send(s, .{ .changed = .{ .setting = one_ } });
     }
 
-    fn send(_: *Settings, s: *Session, m: hp.Message) void {
+    /// The most hull holds for a program that does not read: past it, notices are lost whole, never cut.
+    const max_outbox = 4 << 20;
+
+    // One message after those waiting, and as much as the channel takes now. A line is sent whole or waits whole,
+    // so the program never reads half of one.
+    fn send(st: *Settings, s: *Session, m: hp.Message) void {
         const ch = s.channel orelse return;
-        var buf: [8192]u8 = undefined;
-        var w: std.Io.Writer = .fixed(&buf);
-        hp.write(&w, m) catch return;
-        var rest = w.buffered();
-        while (rest.len > 0) {
+        var line: std.Io.Writer.Allocating = .init(st.gpa);
+        defer line.deinit();
+        hp.write(&line.writer, m) catch return; // out of memory: the notice is lost, never hull
+        if (st.outbox.items.len + line.written().len > max_outbox) return;
+        st.outbox.appendSlice(st.gpa, line.written()) catch return;
+        st.flush(ch);
+    }
+
+    // What waits, as much as the channel takes without blocking.
+    fn flush(st: *Settings, ch: c_int) void {
+        var sent: usize = 0;
+        while (sent < st.outbox.items.len) {
+            const rest = st.outbox.items[sent..];
             const n = std.c.write(ch, rest.ptr, rest.len);
-            if (n <= 0) return; // a program that does not read loses notices, not hull
-            rest = rest[@intCast(n)..];
+            if (n <= 0) break; // full, or the program gone: the rest waits
+            sent += @intCast(n); // safe: a write returns at most what it was given
         }
+        st.outbox.replaceRangeAssumeCapacity(0, sent, &.{});
     }
 
     /// Reads what the program sent and answers it; what the window must do
     /// about it.
     pub fn service(st: *Settings, io: std.Io, s: *Session) Effect {
         const ch = s.channel orelse return .none;
+        st.flush(ch);
         var effect: Effect = .none;
         var buf: [4096]u8 = undefined;
         while (true) {

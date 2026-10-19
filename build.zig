@@ -25,7 +25,8 @@ pub fn build(b: *std.Build) error{LazyDependencyNeeded}!void {
         .imports = &.{.{ .name = "strand", .module = strand }},
     });
     if (!with_runner) return;
-    const runner = b.addExecutable(.{ .name = "hull", .root_module = try runnerModule(b, target, optimize, protocol, strand) });
+    const themes = try themesTable(b);
+    const runner = b.addExecutable(.{ .name = "hull", .root_module = try runnerModule(b, target, optimize, protocol, strand, themes) });
     b.installArtifact(runner);
     const run = b.addRunArtifact(runner);
     run.addPassthruArgs();
@@ -37,7 +38,12 @@ pub fn build(b: *std.Build) error{LazyDependencyNeeded}!void {
         .root_source_file = b.path("tools/bundle.zig"),
         .target = host,
         .optimize = .safe,
-        .imports = &.{.{ .name = "config", .module = b.createModule(.{ .root_source_file = b.path("src/config.zig"), .target = host, .optimize = .safe }) }},
+        .imports = &.{.{ .name = "config", .module = b.createModule(.{
+            .root_source_file = b.path("src/config.zig"),
+            .target = host,
+            .optimize = .safe,
+            .imports = &.{.{ .name = "ghostty_themes", .module = b.createModule(.{ .root_source_file = themes, .target = host, .optimize = .safe }) }},
+        }) }},
     }) });
     b.installArtifact(bundler);
 }
@@ -84,7 +90,10 @@ pub fn dev(b: *std.Build, tools: type) void {
     const test_step = b.step("test", "Run the tests");
     const strand = p.dependency("strand", .{ .target = target, .optimize = optimize }).module("strand");
     const protocol = hull.module("hull-protocol");
-    const units = b.addTest(.{ .name = "hull-tests", .filters = filters, .root_module = runnerModule(p, target, optimize, protocol, strand) catch return });
+    const themes = themesTable(p) catch return;
+    const units = b.addTest(.{ .name = "hull-tests", .filters = filters, .root_module = runnerModule(p, target, optimize, protocol, strand, themes) catch return });
+    const table_tests = b.addTest(.{ .name = "hull-themes-tests", .filters = filters, .root_module = b.createModule(.{ .root_source_file = p.path("tools/themes.zig"), .target = target, .optimize = optimize }) });
+    test_step.dependOn(&b.addRunArtifact(table_tests).step);
     test_step.dependOn(&b.addRunArtifact(units).step);
     const protocol_tests = b.addTest(.{ .name = "hull-protocol-tests", .filters = filters, .root_module = protocol });
     test_step.dependOn(&b.addRunArtifact(protocol_tests).step);
@@ -104,9 +113,22 @@ pub fn dev(b: *std.Build, tools: type) void {
     tools.preflight.addCi(b, p, .{ .tests = test_step });
 }
 
+// Ghostty's themes as hull's table, written by `tools/themes.zig` where hull is built from the folder Ghostty pins.
+fn themesTable(b: *std.Build) error{LazyDependencyNeeded}!std.Build.LazyPath {
+    const folder = try b.dependencyLazy("ghostty_themes", .{});
+    const tool = b.addExecutable(.{ .name = "hull-themes", .root_module = b.createModule(.{
+        .root_source_file = b.path("tools/themes.zig"),
+        .target = b.graph.host,
+        .optimize = .safe,
+    }) });
+    const run = b.addRunArtifact(tool);
+    run.addDirectoryArg2(folder.path(""), .{});
+    return run.addOutputFileArg2("themes.zig", .{});
+}
+
 // The runner: libghostty-vt from Ghostty's Zig 0.17 tree, SDL3 for the window, ztypeset for the type, each a lazy
 // dependency that asking for it here fetches.
-fn runnerModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, protocol: *std.Build.Module, strand: *std.Build.Module) error{LazyDependencyNeeded}!*std.Build.Module {
+fn runnerModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, protocol: *std.Build.Module, strand: *std.Build.Module, themes: std.Build.LazyPath) error{LazyDependencyNeeded}!*std.Build.Module {
     // ReleaseFast whatever hull is built as: Debug terminal code is very slow, and its checks are Ghostty's to
     // run. No SIMD: its paths are C++ (simdutf, highway) the static archive does not carry at this commit.
     const ghostty = try b.dependencyLazy("ghostty", .{ .target = target, .optimize = .fast, .simd = false });
@@ -136,5 +158,6 @@ fn runnerModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.l
     mod.linkLibrary(ghostty.artifact("ghostty-vt-static"));
     mod.linkLibrary(sdl.artifact("SDL3"));
     mod.addAnonymousImport("fonts", .{ .root_source_file = b.path("fonts/fonts.zig") });
+    mod.addAnonymousImport("ghostty_themes", .{ .root_source_file = themes });
     return mod;
 }

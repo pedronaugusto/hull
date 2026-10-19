@@ -44,6 +44,9 @@ pub const Setting = struct {
     step: ?f64 = null,
     /// A choice's values, or a toggle's two in hull's words, off first.
     values: ?[]const Choice = null,
+    /// A long choice's short list: how many of `values`, from the first, the app offers first. A page steps
+    /// through these, and finds any of the rest by searching.
+    featured: ?u32 = null,
     default: Value,
     value: Value,
     /// Whether it can be changed now. A value set while unavailable is
@@ -106,8 +109,9 @@ pub fn asNumber(v: Value) ?f64 {
     };
 }
 
-/// The longest line either side sends: a hello with every setting is a few kilobytes.
-pub const max_line = 64 << 10;
+/// The longest line either side sends: a hello with every setting, Ghostty's six hundred themes among them, is
+/// some forty kilobytes.
+pub const max_line = 256 << 10;
 
 /// Lines from the channel, however they arrive, each at most `max_line`: the other side's bytes are never
 /// believed, so a line that does not end in time is refused rather than held.
