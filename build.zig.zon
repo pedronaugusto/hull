@@ -13,8 +13,8 @@
         },
         // the protocol's lines, typed JSON
         .strand = .{
-            .url = "git+https://github.com/pedronaugusto/strand?ref=v0.13.0#2e5339055003178387222ec2fbb674b95c5432de",
-            .hash = "strand-0.13.0-8LNWVvwIJwBSRhUdNPFzHda8W132HUFV6AFq4xA_-Zz-",
+            .url = "git+https://github.com/pedronaugusto/strand?ref=v0.13.1#3f25dff5fc9ccacaab7772f6d414e4ec2720eeb4",
+            .hash = "strand-0.13.1-8LNWVo8NJwACyQGeXIBsswIL5a8Y--omAxQl5bnULXxY",
         },
         // shaping and rasterising: the family's, as lantern pins it
         .ztypeset = .{
@@ -37,6 +37,12 @@
         .ghostty_themes = .{
             .url = "https://deps.files.ghostty.org/ghostty-themes-release-20260921-150923-0b55a9e.tgz",
             .hash = "N-V-__8AAM94BAAFk_hn4UW0x_OBD2g0vOwexeAAyWNNo4eB",
+            .lazy = true,
+        },
+        // the program's pseudo-terminal and process tree, POSIX and Windows: the line visor builds on
+        .conduit = .{
+            .url = "git+https://github.com/pedronaugusto/conduit?ref=v0.8.5#f1fa4353c45120c1ded507f067044b4866902c8c",
+            .hash = "conduit-0.8.5-4rIA71FzFADpp7SEBu81uxg8t1Jk7plnsmU_t-arO_Ox",
             .lazy = true,
         },
     },

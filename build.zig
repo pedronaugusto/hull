@@ -126,8 +126,8 @@ fn themesTable(b: *std.Build) error{LazyDependencyNeeded}!std.Build.LazyPath {
     return run.addOutputFileArg2("themes.zig", .{});
 }
 
-// The runner: libghostty-vt from Ghostty's Zig 0.17 tree, SDL3 for the window, ztypeset for the type, each a lazy
-// dependency that asking for it here fetches.
+// The runner: libghostty-vt from Ghostty's Zig 0.17 tree, SDL3 for the window, ztypeset for the type, conduit for
+// the program, each a lazy dependency that asking for it here fetches.
 fn runnerModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, protocol: *std.Build.Module, strand: *std.Build.Module, themes: std.Build.LazyPath) error{LazyDependencyNeeded}!*std.Build.Module {
     // ReleaseFast whatever hull is built as: Debug terminal code is very slow, and its checks are Ghostty's to
     // run. No SIMD: its paths are C++ (simdutf, highway) the static archive does not carry at this commit.
@@ -135,6 +135,7 @@ fn runnerModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.l
     const sdl = try b.dependencyLazy("sdl", .{ .target = target, .optimize = optimize });
     const zt = try b.dependencyLazy("ztypeset", .{ .target = target, .optimize = optimize });
     const aegis = try b.dependencyLazy("aegis", .{ .target = target, .optimize = optimize });
+    const conduit = try b.dependencyLazy("conduit", .{ .target = target, .optimize = optimize });
     const vt_h = b.addTranslateC(.{ .root_source_file = ghostty.path("include/ghostty/vt.h"), .target = target, .optimize = optimize });
     vt_h.addIncludePath(ghostty.path("include"));
     vt_h.defineCMacro("GHOSTTY_STATIC", null);
@@ -153,6 +154,7 @@ fn runnerModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.l
             .{ .name = "strand", .module = strand },
             .{ .name = "ztypeset", .module = zt.module("ztypeset") },
             .{ .name = "aegis", .module = aegis.module("aegis") },
+            .{ .name = "conduit", .module = conduit.module("conduit") },
         },
     });
     mod.linkLibrary(ghostty.artifact("ghostty-vt-static"));

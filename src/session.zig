@@ -1,27 +1,20 @@
-//! One program in one terminal: its pty, its terminal, the faces it is
+//! One program in one terminal: the program, its terminal, the faces it is
 //! drawn in and where the grid sits. The window and the headless runner
 //! both drive this; neither knows the other.
 const std = @import("std");
-const builtin = @import("builtin");
 const config = @import("config.zig");
 const theme = @import("theme.zig");
 const font = @import("font.zig");
 const render = @import("render.zig");
 const vt_mod = @import("vt.zig");
-const Pty = @import("pty.zig").Pty;
-const Winsize = @import("pty.zig").Winsize;
+const Program = @import("Program.zig");
 
 pub const Vt = vt_mod.Vt;
 const c = vt_mod.c;
 
-extern "c" fn clock_gettime_nsec_np(clock: c_int) u64;
-
-/// Monotonic nanoseconds, the clock AppKit's event timestamps are on.
-pub fn now() u64 {
-    if (builtin.os.tag == .macos) return clock_gettime_nsec_np(8); // CLOCK_UPTIME_RAW
-    var ts: std.c.timespec = undefined;
-    _ = std.c.clock_gettime(.MONOTONIC, &ts);
-    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+/// Nanoseconds on the awake clock, the one AppKit's event timestamps are on (CLOCK_UPTIME_RAW on macOS).
+pub fn now(io: std.Io) u64 {
+    return @intCast(std.Io.Clock.awake.now(io).nanoseconds); // safe: the awake clock counts up from boot
 }
 
 /// Variables that would tell the program it runs in another terminal.
@@ -34,13 +27,11 @@ const foreign_prefixes = [_][]const u8{ "KITTY_", "GHOSTTY_", "ITERM_", "WEZTERM
 
 pub const Session = struct {
     gpa: std.mem.Allocator,
-    arena: std.heap.ArenaAllocator,
+    io: std.Io,
     app: config.App,
     fonts: font.Fonts,
     vt: Vt,
-    pty: Pty = undefined,
-    /// hull's end of the program's settings channel.
-    channel: ?c_int = null,
+    program: Program = undefined,
     font_bytes: font.Fonts.Bytes,
     fallback: []const []const u8,
     /// Bumped when the faces change: the renderer's atlas starts over.
@@ -61,12 +52,12 @@ pub const Session = struct {
 
     /// A session for `app` at `scale` device pixels per point, its window
     /// `cols`×`rows` cells. The program is not started yet.
-    pub fn init(s: *Session, gpa: std.mem.Allocator, app: config.App, font_bytes: font.Fonts.Bytes, fallback: []const []const u8, scale: f32) !void {
+    pub fn init(s: *Session, gpa: std.mem.Allocator, io: std.Io, app: config.App, font_bytes: font.Fonts.Bytes, fallback: []const []const u8, scale: f32) !void {
         const t = app.terminal;
         const th = try config.colors(t);
         s.* = .{
             .gpa = gpa,
-            .arena = .init(gpa),
+            .io = io,
             .app = app,
             .fonts = try font.Fonts.init(gpa, font_bytes, fallback, t.font_size * scale, t.adjust_cell_width * scale, t.adjust_cell_height * scale),
             .vt = undefined,
@@ -76,7 +67,7 @@ pub const Session = struct {
             .layout = undefined,
             .w = 0,
             .h = 0,
-            .started_ns = now(),
+            .started_ns = now(io),
         };
         errdefer s.fonts.deinit();
         const cw = s.fonts.cell_w;
@@ -90,11 +81,9 @@ pub const Session = struct {
     }
 
     pub fn deinit(s: *Session) void {
-        if (s.channel) |f| _ = std.c.close(f);
-        if (s.spawned) s.pty.close();
+        if (s.spawned) s.program.stop();
         s.vt.deinit();
         s.fonts.deinit();
-        s.arena.deinit();
     }
 
     fn padX(s: *const Session) u32 {
@@ -105,39 +94,36 @@ pub const Session = struct {
     }
 
     /// Starts the program: its argv, in `cwd`, with the parent's environment
-    /// less any other terminal's, and hull's own.
-    pub fn spawn(s: *Session, argv: []const []const u8, parent_env: *const std.process.Environ.Map, cwd: ?[]const u8) !void {
-        const a = s.arena.allocator();
-        var env: std.ArrayList([]const u8) = .empty;
+    /// less any other terminal's, and hull's own. `wake` is called from
+    /// another task when the program has written or said something.
+    pub fn spawn(s: *Session, argv: []const []const u8, parent_env: *const std.process.Environ.Map, cwd: ?[]const u8, wake: ?Program.Wake) !void {
+        var env: std.process.Environ.Map = .init(s.gpa);
+        defer env.deinit();
         var it = parent_env.iterator();
         outer: while (it.next()) |e| {
             for (foreign) |k| if (std.mem.eql(u8, e.key_ptr.*, k)) continue :outer;
             for (foreign_prefixes) |p| if (std.mem.startsWith(u8, e.key_ptr.*, p)) continue :outer;
-            try env.append(a, try a.print("{s}={s}", .{ e.key_ptr.*, e.value_ptr.* }));
+            try env.put(e.key_ptr.*, e.value_ptr.*);
         }
         // What the program may know: that it runs in hull, as which app, and
         // the settings hull owns that a program may offer its player.
-        const t = s.app.terminal;
-        try env.appendSlice(a, &.{
-            "TERM=xterm-256color",
-            "COLORTERM=truecolor",
-            "TERM_PROGRAM=hull",
-            "TERM_PROGRAM_VERSION=" ++ vt_mod.version,
-            std.fmt.comptimePrint("HULL_SOCKET=fd:{d}", .{@import("pty.zig").channel_fd}),
-            "HULL=" ++ vt_mod.version,
-            try a.print("HULL_APP={s}", .{s.app.id}),
-            try a.print("HULL_THEME={s}", .{t.theme}),
-        });
-        if (parent_env.get("LANG") == null) try env.append(a, "LANG=en_US.UTF-8");
-        const ch = try @import("pty.zig").channel();
-        s.pty = try Pty.spawn(a, argv, env.items, cwd, s.winsize(), ch[1]);
-        _ = std.c.close(ch[1]);
-        s.channel = ch[0];
+        const own = [_][2][]const u8{
+            .{ "TERM", "xterm-256color" },
+            .{ "COLORTERM", "truecolor" },
+            .{ "TERM_PROGRAM", "hull" },
+            .{ "TERM_PROGRAM_VERSION", vt_mod.version },
+            .{ "HULL", vt_mod.version },
+            .{ "HULL_APP", s.app.id },
+            .{ "HULL_THEME", s.app.terminal.theme },
+        };
+        for (own) |kv| try env.put(kv[0], kv[1]);
+        if (parent_env.get("LANG") == null) try env.put("LANG", "en_US.UTF-8");
+        try s.program.start(s.gpa, s.io, .{ .argv = argv, .environ = &env, .cwd = cwd, .size = s.winsize(), .wake = wake });
         s.spawned = true;
-        s.vt.pty = &s.pty;
+        s.vt.program = &s.program;
     }
 
-    fn winsize(s: *const Session) Winsize {
+    fn winsize(s: *const Session) Program.Size {
         return .{
             .rows = s.vt.rows,
             .cols = s.vt.cols,
@@ -151,20 +137,13 @@ pub const Session = struct {
         if (!s.spawned or s.ended) return s.ended;
         var buf: [64 * 1024]u8 = undefined;
         while (true) {
-            const r = s.pty.read(&buf);
-            if (r.n > 0) {
-                s.output_bytes += r.n;
-                s.vt.feed(buf[0..r.n]);
-            }
-            switch (r.state) {
-                .more => continue,
-                .drained => return false,
-                .ended => {
-                    s.ended = true;
-                    _ = s.pty.reap();
-                    return true;
-                },
-            }
+            const n = s.program.take(&buf) orelse {
+                s.ended = true;
+                return true;
+            };
+            if (n == 0) return false;
+            s.output_bytes += n;
+            s.vt.feed(buf[0..n]);
         }
     }
 
@@ -183,7 +162,7 @@ pub const Session = struct {
         s.layout.pad_y = (h - @min(h, rows * ch)) / 2;
         if (cols == s.vt.cols and rows == s.vt.rows and cw == s.vt.cell_w and ch == s.vt.cell_h) return;
         s.vt.resize(cols, rows, cw, ch);
-        if (s.spawned) s.pty.resize(s.winsize());
+        if (s.spawned) s.program.resize(s.winsize());
     }
 
     /// The faces at a new size: the cell, and so the grid, follow.
@@ -213,7 +192,7 @@ pub const Session = struct {
     }
 
     pub fn send(s: *Session, bytes: []const u8) void {
-        if (s.spawned and !s.ended) s.pty.write(bytes);
+        if (s.spawned and !s.ended) s.program.write(bytes);
     }
 
     pub fn key(s: *Session, k: vt_mod.Key) void {
@@ -234,7 +213,7 @@ pub const Session = struct {
             r.epoch = s.font_epoch;
         }
         const st = r.draw(&s.vt, &s.fonts, s.w, s.h, s.layout);
-        const t = now();
+        const t = now(s.io);
         if (s.first_frame_ns == null and s.output_bytes > 0) s.first_frame_ns = t;
         if (s.first_image_ns == null and st.images > 0) s.first_image_ns = t;
         return st;

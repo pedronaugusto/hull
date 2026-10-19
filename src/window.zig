@@ -1,5 +1,5 @@
 //! hull's window, on SDL3: one program, one window, drawn by SDL's renderer
-//! (Metal on macOS). A thread reads the program's output and wakes the
+//! (Metal on macOS). The program's tasks read its output and wake the
 //! loop with an event of hull's own; the loop feeds the terminal, draws
 //! when something changed, and otherwise waits in SDL for a key, a resize
 //! or more output.
@@ -30,20 +30,6 @@ pub const Options = struct {
     snap: ?[]const u8 = null,
 };
 
-/// The program's output, handed from the reader thread to the loop.
-const Inbox = struct {
-    channel: c_int = -1,
-    channel_armed: std.atomic.Value(bool) = .init(true),
-    mutex: std.c.pthread_mutex_t = std.c.PTHREAD_MUTEX_INITIALIZER,
-    cond: std.c.pthread_cond_t = std.c.PTHREAD_COND_INITIALIZER,
-    buf: [1 << 20]u8 = undefined,
-    len: usize = 0,
-    ended: bool = false,
-    stop: bool = false,
-    /// The event that wakes the loop.
-    wake: u32 = 0,
-};
-
 const Pending = struct {
     key: vt_mod.Key,
     text: [8]u8 = undefined,
@@ -63,7 +49,7 @@ const Win = struct {
 var win: *Win = undefined;
 
 pub fn run(gpa: std.mem.Allocator, app: config.App, bytes: font.Fonts.Bytes, fallback: []const []const u8, argv: []const []const u8, env: *const std.process.Environ.Map, cwd: ?[]const u8, opts: Options) !void {
-    const t_main = now();
+    const t_main = now(opts.io);
     const name = try gpa.dupeSentinel(u8, app.name, 0);
     defer gpa.free(name);
     const version = try gpa.dupeSentinel(u8, app.version, 0);
@@ -83,10 +69,10 @@ pub fn run(gpa: std.mem.Allocator, app: config.App, bytes: font.Fonts.Bytes, fal
     const renderer = sdl.SDL_CreateRenderer(window, null) orelse return error.Renderer;
     defer sdl.SDL_DestroyRenderer(renderer);
     _ = sdl.SDL_SetRenderVSync(renderer, 1);
-    const t_window = now();
+    const t_window = now(opts.io);
 
     var s: Session = undefined;
-    try s.init(gpa, app, bytes, fallback, sdl.SDL_GetWindowPixelDensity(window));
+    try s.init(gpa, opts.io, app, bytes, fallback, sdl.SDL_GetWindowPixelDensity(window));
     defer s.deinit();
     fit(window, &s, app.window);
     _ = sdl.SDL_ShowWindow(window);
@@ -100,31 +86,19 @@ pub fn run(gpa: std.mem.Allocator, app: config.App, bytes: font.Fonts.Bytes, fal
     defer st.deinit();
     st.load(opts.io, env, app.id);
     try st.applyLoaded(&s);
-    try s.spawn(argv, env, cwd);
+    var wake_event = sdl.SDL_RegisterEvents(1);
+    try s.spawn(argv, env, cwd, .{ .context = &wake_event, .call = wake });
     st.hello(&s);
     if (st.fullscreen) _ = sdl.SDL_SetWindowFullscreen(window, true);
     _ = sdl.SDL_StartTextInput(window);
 
-    const inbox = try gpa.create(Inbox);
-    defer gpa.destroy(inbox);
-    inbox.* = .{ .channel = s.channel orelse -1, .wake = sdl.SDL_RegisterEvents(1) };
-    var loop: Loop = .{ .gpa = gpa, .app = app, .window = window, .s = &s, .st = &st, .gpu = &gpu, .r = &r, .inbox = inbox, .opts = opts, .t_main = t_main, .w = .{ .s = &s, .app = app } };
+    var loop: Loop = .{ .gpa = gpa, .app = app, .window = window, .s = &s, .st = &st, .gpu = &gpu, .r = &r, .opts = opts, .t_main = t_main, .w = .{ .s = &s, .app = app } };
     defer {
         loop.w.latencies.deinit(gpa);
         loop.w.draws.deinit(gpa);
     }
     win = &loop.w;
     loop.snapAt(opts.snap);
-    const reader = try std.Thread.spawn(.{}, readLoop, .{ &s, inbox });
-    defer {
-        _ = std.c.pthread_mutex_lock(&inbox.mutex);
-        inbox.stop = true;
-        _ = std.c.pthread_cond_signal(&inbox.cond);
-        _ = std.c.pthread_mutex_unlock(&inbox.mutex);
-        s.pty.close();
-        s.spawned = false;
-        reader.join();
-    }
     while (loop.turn()) {}
     if (std.c.getenv("HULL_DIAG") != null) report(gpa, &loop.w, &s, t_main, t_window);
 }
@@ -158,7 +132,6 @@ const Loop = struct {
     st: *settings_mod.Settings,
     gpu: *Gpu,
     r: *render.Renderer,
-    inbox: *Inbox,
     opts: Options,
     t_main: u64,
     w: Win,
@@ -217,7 +190,7 @@ const Loop = struct {
     // HULL_DIAG: what hull holds, every two seconds.
     fn memory(l: *Loop) void {
         if (std.c.getenv("HULL_DIAG") == null) return;
-        const t = now();
+        const t = now(l.opts.io);
         if (t - l.last_mem < 2 * std.time.ns_per_s) return;
         l.last_mem = t;
         const ru = diag.usage(diag.getpid()) orelse return;
@@ -226,20 +199,11 @@ const Loop = struct {
 
     // The program's output, into the terminal; whether the program has ended.
     fn output(l: *Loop) bool {
-        const inbox = l.inbox;
-        _ = std.c.pthread_mutex_lock(&inbox.mutex);
-        const n = inbox.len;
-        if (n > 0) {
-            l.s.output_bytes += n;
-            l.s.vt.feed(inbox.buf[0..n]);
-            inbox.len = 0;
-            _ = std.c.pthread_cond_signal(&inbox.cond);
-        }
-        const ended = inbox.ended;
-        _ = std.c.pthread_mutex_unlock(&inbox.mutex);
-        if (n > 0) {
+        const before = l.s.output_bytes;
+        const ended = l.s.pump();
+        if (l.s.output_bytes > before) {
             l.w.dirty = true;
-            if (l.w.key_at != null and l.w.output_at == null) l.w.output_at = now();
+            if (l.w.key_at != null and l.w.output_at == null) l.w.output_at = now(l.opts.io);
         }
         return ended;
     }
@@ -264,7 +228,6 @@ const Loop = struct {
                 _ = sdl.SDL_SetWindowFullscreen(l.window, l.st.fullscreen);
             },
         }
-        l.inbox.channel_armed.store(true, .release);
         if (full != l.st.is_fullscreen) {
             l.st.windowFullscreen(s, full);
             l.w.dirty = true;
@@ -281,10 +244,10 @@ const Loop = struct {
     fn frame(l: *Loop) void {
         const synced = l.s.vt.synchronized();
         if (synced) {
-            if (l.sync_since == null) l.sync_since = now();
+            if (l.sync_since == null) l.sync_since = now(l.opts.io);
         } else l.sync_since = null;
-        const hold = synced and now() - l.sync_since.? < std.time.ns_per_s;
-        if (l.snap_at) |at| if (@as(f64, @floatFromInt(now() - l.t_main)) / 1e9 >= at) {
+        const hold = synced and now(l.opts.io) - l.sync_since.? < std.time.ns_per_s;
+        if (l.snap_at) |at| if (@as(f64, @floatFromInt(now(l.opts.io) - l.t_main)) / 1e9 >= at) {
             l.snap_at = null;
             l.gpu.want_snap = true;
             l.w.dirty = true;
@@ -294,9 +257,9 @@ const Loop = struct {
             return;
         }
         l.w.dirty = false;
-        const t0 = now();
+        const t0 = now(l.opts.io);
         _ = l.s.draw(l.r);
-        const t1 = now();
+        const t1 = now(l.opts.io);
         l.w.draws.append(l.gpa, t1 - t0) catch log.debug("a frame's time not kept: the report is short, the frame is not", .{});
         if (l.gpu.snap.items.len > 0) {
             diag.saveSnap(l.gpa, l.snap_path, l.gpu.snap.items, l.gpu.w, l.gpu.h);
@@ -324,60 +287,17 @@ fn report(gpa: std.mem.Allocator, w: *Win, s: *Session, t_main: u64, t_window: u
     log.info("{s}", .{buf.written()});
 }
 
-/// Reads the program's output on its own thread; the loop takes it.
-fn readLoop(s: *Session, inbox: *Inbox) void {
-    var buf: [64 * 1024]u8 = undefined;
-    while (true) {
-        const watch = inbox.channel >= 0 and inbox.channel_armed.load(.acquire);
-        var pfd = [_]std.c.pollfd{
-            .{ .fd = s.pty.fd, .events = std.c.POLL.IN, .revents = 0 },
-            .{ .fd = if (watch) inbox.channel else -1, .events = std.c.POLL.IN, .revents = 0 },
-        };
-        _ = std.c.poll(&pfd, 2, 100);
-        if (pfd[1].revents != 0) {
-            // the loop reads it; wake it once until it has
-            inbox.channel_armed.store(false, .release);
-            wake(inbox);
-        }
-        _ = std.c.pthread_mutex_lock(&inbox.mutex);
-        if (inbox.stop) {
-            _ = std.c.pthread_mutex_unlock(&inbox.mutex);
-            return;
-        }
-        _ = std.c.pthread_mutex_unlock(&inbox.mutex);
-        if (pfd[0].revents == 0) continue;
-        const r = s.pty.read(&buf);
-        _ = std.c.pthread_mutex_lock(&inbox.mutex);
-        var rest = buf[0..r.n];
-        while (rest.len > 0 and !inbox.stop) {
-            const room = inbox.buf.len - inbox.len;
-            if (room == 0) {
-                _ = std.c.pthread_cond_wait(&inbox.cond, &inbox.mutex);
-                continue;
-            }
-            const k = @min(room, rest.len);
-            @memcpy(inbox.buf[inbox.len..][0..k], rest[0..k]);
-            inbox.len += k;
-            rest = rest[k..];
-        }
-        if (r.state == .ended) inbox.ended = true;
-        const done = inbox.ended or inbox.stop;
-        _ = std.c.pthread_mutex_unlock(&inbox.mutex);
-        wake(inbox);
-        if (done) return;
-    }
-}
-
-// SDL's event queue takes events from any thread.
-fn wake(inbox: *Inbox) void {
+// SDL's event queue takes events from any task.
+fn wake(context: *anyopaque) void {
+    const event: *const u32 = @ptrCast(@alignCast(context)); // safe: the window's wake event, given as its context
     var ev: sdl.SDL_Event = std.mem.zeroes(sdl.SDL_Event);
-    ev.type = inbox.wake;
+    ev.type = event.*;
     _ = sdl.SDL_PushEvent(&ev);
 }
 
 fn send(k: vt_mod.Key) void {
     if (std.c.getenv("HULL_DIAG") != null) log.debug("key {t} {d} mods={d} text={s} cp={d}", .{ k.action, k.key, k.mods, k.text, k.unshifted });
-    if (k.action != .release and win.key_at == null) win.key_at = now();
+    if (k.action != .release and win.key_at == null) win.key_at = now(win.s.io);
     win.s.key(k);
 }
 

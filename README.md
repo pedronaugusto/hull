@@ -1,6 +1,6 @@
 # hull
 
-hull packages a terminal program as a desktop app. The program runs on a pty inside hull's window;
+hull packages a terminal program as a desktop app. The program runs on a pseudo-terminal inside hull's window;
 [libghostty-vt](https://github.com/ghostty-org/ghostty) emulates the terminal and SDL3 draws it.
 
 - Text from ztypeset's glyphs, kitty pictures drawn pixel for pixel, the kitty keyboard protocol.
@@ -8,7 +8,7 @@ hull packages a terminal program as a desktop app. The program runs on a pty ins
 - Settings a program can read and change while it runs, over `hull-protocol`.
 - A bundle made from the app's own build with `addApp`.
 
-Status: **0.0.0**, private. macOS works; Linux builds; Windows is not built yet. MIT.
+Status: **0.0.0**, private. macOS works; Linux and Windows build. MIT.
 
 ## An app from its own build
 
@@ -49,6 +49,8 @@ HULL_DIAG=1 ./zig-out/bin/hull --app DIR    # memory every two seconds, and the 
 - `src/render.zig`: a frame as draws against a narrow backend (glyph atlas, images, rects, quads, present);
   `gpu.zig` is that backend on SDL3's renderer (Metal on macOS, Direct3D on Windows, Vulkan on Linux), `cpu.zig`
   the same on the CPU, for PNGs.
+- `src/Program.zig`: the program on conduit's pseudo-terminal, its process tree ended with it, its output and
+  channel read on tasks of their own.
 - `src/window.zig`: SDL3's window and its events; `keys.zig` its keys as libghostty's.
 - `src/font.zig`: ztypeset faces, the cell, glyph rasters.
 - `src/settings.zig` and `protocol/hull_protocol.zig`: hull's settings and the channel a program sees them on.
@@ -79,7 +81,7 @@ The app sets everything; nothing is read from the user's terminal configuration.
 ## What a program sees
 
 `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=hull`, `HULL=<version>`, `HULL_APP=<id>`, and
-`HULL_SOCKET=fd:3`: the channel to hull's settings. Its presence is how a program knows it runs in hull. Other
+`HULL_SOCKET=fd:3`: the channel to hull's settings, on POSIX. Its presence is how a program knows it runs in hull. Other
 terminals' variables (TMUX, KITTY_*, GHOSTTY_*, ITERM_*, ...) are removed. XTVERSION answers `hull <version>`.
 
 hull-protocol frames JSON lines: `hello` (every setting: its kind, range or values, a toggle's two words, its

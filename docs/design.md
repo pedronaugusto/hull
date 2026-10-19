@@ -5,8 +5,8 @@ is the terminal it runs in, owned by the app. What is built is marked so; the re
 
 ## The boundary
 
-- **One program per window, unchanged.** A program knows nothing of hull unless it wants to: it runs on a pty and
-  draws as it would in any terminal. *Protects:* tycho, arcana, a lantern game and any visor program, packaged
+- **One program per window, unchanged.** A program knows nothing of hull unless it wants to: it runs on a pseudo-terminal
+  and draws as it would in any terminal. *Protects:* tycho, arcana, a lantern game and any visor program, packaged
   without a line changed.
 - **The app owns everything; the player's terminal nothing.** Font, theme, opacity, padding and window policy come
   from the app's `hull.zon`, never a terminal configuration. *Protects:* an app that looks the same on every
@@ -27,10 +27,13 @@ is the terminal it runs in, owned by the app. What is built is marked so; the re
      keeps its texture and takes new pixels in place. Built.
    - `cpu.zig` is the same on the CPU, for headless frames and tests. Built.
    - A console backend on the family's own rendering framework is a later addition behind the same interface.
-4. **window**: SDL3's window and events: keys with their text, input methods, macOS's own full screen, the window's
-   pixel density. The program's output is read on a thread of its own and wakes the loop. Built on macOS.
-5. **settings**: hull's own, declared, applied live and kept per app (`hull-settings.json`). Built.
-6. **packaging**: `addApp` from the app's build, and the bundler it runs where the app is built. Built for macOS.
+4. **program**: conduit's pseudo-terminal and child (`Program.zig`): a session of its own on POSIX, a pseudoconsole
+   in passthrough on Windows, and everything it starts ended with it. Its output and its channel are read on
+   `std.Io` tasks into queues the loop takes from, and wake it. Built.
+5. **window**: SDL3's window and events: keys with their text, input methods, macOS's own full screen, the window's
+   pixel density. Built on macOS.
+6. **settings**: hull's own, declared, applied live and kept per app (`hull-settings.json`). Built.
+7. **packaging**: `addApp` from the app's build, and the bundler it runs where the app is built. Built for macOS.
 
 ## Settings: three owners, one page
 
@@ -43,8 +46,9 @@ is the terminal it runs in, owned by the app. What is built is marked so; the re
   settings declared with their kinds, values and availability, set, and changes told. A program's settings page
   shows them beside its own; in a terminal there are none.
 - hull ships words for its settings; a program may reword them by name.
-- A line goes to the program whole or waits whole: what the channel will not take yet waits in an outbox, sent as
-  the program reads, so a program that reads late gets every line, never half of one.
+- A line goes to the program whole or not at all: a task writes the channel as the program reads it, up to 4 MiB
+  waiting, so a program that reads late gets every line, never half of one, and one that never reads costs a
+  bounded amount.
 - A theme change reaches every program the standard way, OSC 4, 10 and 11 and mode 2031's notice, in hull and in
   any terminal alike.
 
@@ -52,9 +56,12 @@ is the terminal it runs in, owned by the app. What is built is marked so; the re
 
 - **macOS:** built. An `.app`, ad-hoc signed; a release signs and notarises.
 - **Linux:** the runner builds; an AppImage is to come.
-- **Windows:** not built; the pty layer is POSIX alone, so hull's CI waits for it. The program will run on plain
-  pipes rather than ConPTY, which rewrites the stream and drops sequences it does not know (kitty pictures among
-  them), its size given over `hull-protocol`.
+- **Windows:** the runner builds. The program runs on a pseudoconsole asked for passthrough, so the program's own
+  bytes reach the terminal rather than the console host's redraw of them (which drops what it does not know,
+  kitty pictures among them); a Windows too old for passthrough gets the redraw. A child on a pseudoconsole is
+  given no handles of its own, so the settings channel needs another way in there: a named pipe named in
+  `HULL_SOCKET`, which belongs in conduit as a channel to a child. Until then a program on Windows runs without
+  hull's settings.
 
 ## Invariants
 

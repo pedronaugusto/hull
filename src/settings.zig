@@ -78,8 +78,6 @@ pub const Settings = struct {
     path: ?[]const u8 = null,
     lines: hp.Lines = .{},
     scratch: std.ArrayList(u8) = .empty,
-    /// What the channel would not take yet, whole lines, sent as the program reads.
-    outbox: std.ArrayList(u8) = .empty,
     arena: std.heap.ArenaAllocator,
 
     pub fn init(gpa: std.mem.Allocator, t: config.Terminal) Settings {
@@ -97,7 +95,6 @@ pub const Settings = struct {
     pub fn deinit(st: *Settings) void {
         st.lines.deinit(st.gpa);
         st.scratch.deinit(st.gpa);
-        st.outbox.deinit(st.gpa);
         st.arena.deinit();
     }
 
@@ -194,44 +191,26 @@ pub const Settings = struct {
         st.send(s, .{ .changed = .{ .setting = one_ } });
     }
 
-    /// The most hull holds for a program that does not read: past it, notices are lost whole, never cut.
-    const max_outbox = 4 << 20;
-
-    // One message after those waiting, and as much as the channel takes now. A line is sent whole or waits whole,
-    // so the program never reads half of one.
+    // One message, after those waiting. A line is sent whole or not at all, so the program never reads half of one;
+    // a program that has left the channel's bound unread loses the notice whole.
     fn send(st: *Settings, s: *Session, m: hp.Message) void {
-        const ch = s.channel orelse return;
+        if (!s.spawned or !s.program.talks()) return;
         var line: std.Io.Writer.Allocating = .init(st.gpa);
         defer line.deinit();
         hp.write(&line.writer, m) catch return; // out of memory: the notice is lost, never hull
-        if (st.outbox.items.len + line.written().len > max_outbox) return;
-        st.outbox.appendSlice(st.gpa, line.written()) catch return;
-        st.flush(ch);
-    }
-
-    // What waits, as much as the channel takes without blocking.
-    fn flush(st: *Settings, ch: c_int) void {
-        var sent: usize = 0;
-        while (sent < st.outbox.items.len) {
-            const rest = st.outbox.items[sent..];
-            const n = std.c.write(ch, rest.ptr, rest.len);
-            if (n <= 0) break; // full, or the program gone: the rest waits
-            sent += @intCast(n); // safe: a write returns at most what it was given
-        }
-        st.outbox.replaceRangeAssumeCapacity(0, sent, &.{});
+        _ = s.program.tell(line.written());
     }
 
     /// Reads what the program sent and answers it; what the window must do
     /// about it.
     pub fn service(st: *Settings, io: std.Io, s: *Session) Effect {
-        const ch = s.channel orelse return .none;
-        st.flush(ch);
+        if (!s.spawned or !s.program.talks()) return .none;
         var effect: Effect = .none;
         var buf: [4096]u8 = undefined;
         while (true) {
-            const n = std.c.read(ch, &buf, buf.len);
-            if (n <= 0) break;
-            st.lines.feed(st.gpa, buf[0..@intCast(n)]) catch return effect;
+            const n = s.program.hear(&buf);
+            if (n == 0) break;
+            st.lines.feed(st.gpa, buf[0..n]) catch return effect;
         }
         while (st.lines.next(&st.scratch, st.gpa) catch null) |line| {
             var arena: std.heap.ArenaAllocator = .init(st.gpa);

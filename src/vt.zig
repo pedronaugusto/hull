@@ -7,7 +7,7 @@ const std = @import("std");
 pub const c = @import("vt");
 const theme_mod = @import("theme.zig");
 const config = @import("config.zig");
-const Pty = @import("pty.zig").Pty;
+const Program = @import("Program.zig");
 
 pub const version = "0.0.0";
 pub const xtversion = "hull " ++ version;
@@ -21,7 +21,8 @@ pub const Vt = struct {
     key_encoder: c.GhosttyKeyEncoder = null,
     key_event: c.GhosttyKeyEvent = null,
 
-    pty: ?*Pty = null,
+    /// The program the terminal answers.
+    program: ?*Program = null,
     cols: u16,
     rows: u16,
     cell_w: u32,
@@ -175,7 +176,7 @@ pub const Vt = struct {
     }
 
     fn reply(v: *Vt, bytes: []const u8) void {
-        if (v.pty) |p| p.write(bytes);
+        if (v.program) |p| p.write(bytes);
     }
 };
 

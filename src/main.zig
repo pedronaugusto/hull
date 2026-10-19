@@ -123,9 +123,9 @@ pub fn main(init: std.process.Init) !void {
 
     if (out) |o| {
         var s: Session = undefined;
-        try s.init(gpa, app, bytes, fallback.items, scale);
+        try s.init(gpa, io, app, bytes, fallback.items, scale);
         defer s.deinit();
-        try s.spawn(argv, init.environ_map, null);
+        try s.spawn(argv, init.environ_map, null, null);
         try headless.run(gpa, io, &s, .{ .out = o, .at = at, .also = also, .presses = keys, .fullscreen = fullscreen });
         return;
     }
@@ -179,5 +179,6 @@ test {
     _ = @import("keys.zig");
     _ = @import("pngdec.zig");
     _ = @import("settings.zig");
+    _ = @import("Program.zig");
     _ = @import("headless.zig");
 }
