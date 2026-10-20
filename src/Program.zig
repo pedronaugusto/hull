@@ -4,20 +4,16 @@
 //! channel; what hull says back goes out on a third, a line whole or not at
 //! all. Ending it ends what it started: its tree is conduit's to reach.
 //!
-//! The channel is a socket at the program's descriptor 3 on POSIX. Windows
-//! gives a child on a pseudoconsole no handles of its own (conduit refuses
-//! `extra_fds` with `.pty` for that reason), so there the program runs
-//! without one and offers no window settings until the channel is named
-//! another way.
+//! The channel is conduit's: a socket pair on POSIX, a duplex pipe on
+//! Windows, the program's end named in `HULL_SOCKET`.
 const std = @import("std");
 const builtin = @import("builtin");
 const conduit = @import("conduit");
+const hp = @import("hull-protocol");
 
 const Program = @This();
 const is_windows = builtin.os.tag == .windows;
 
-/// The descriptor a program finds hull's channel on.
-pub const channel_fd = 3;
 /// The most of the program's output held for the loop, in bytes; past it the reader waits.
 pub const max_output = 1 << 20;
 /// The most of the program's channel held for the loop, in bytes.
@@ -68,33 +64,31 @@ const Channel = struct {
 };
 
 /// Starts the program in place: `p` must stay where it is until `stop`. The environment is the program's as given;
-/// `HULL_SOCKET` is added to it here where the program has a channel.
+/// conduit adds `HULL_SOCKET` to it where the program has a channel.
 pub fn start(p: *Program, gpa: std.mem.Allocator, io: std.Io, opts: Options) !void {
     const room = try gpa.alloc(u8, max_output);
     errdefer gpa.free(room);
     p.* = .{ .gpa = gpa, .io = io, .pty = undefined, .child = undefined, .output = .init(room), .room = room, .channel = null, .wake = opts.wake };
-    var env = try opts.environ.clone(gpa);
-    defer env.deinit();
-    const ends: ?[2]std.Io.File = if (is_windows) null else if (opts.channel) try socketPair() else null;
-    defer if (ends) |e| e[1].close(io);
-    errdefer if (ends) |e| e[0].close(io);
-    if (ends != null) try env.put("HULL_SOCKET", std.fmt.comptimePrint("fd:{d}", .{channel_fd}));
+    const ends: ?conduit.Channel = if (opts.channel) try .open() else null;
+    // the program's end is the program's once it is spawned, or no one's
+    defer if (ends) |e| e.child.close(io);
+    errdefer if (ends) |e| e.parent.close(io);
 
     p.pty = try .open(gpa, io, .{ .rows = opts.size.rows, .cols = opts.size.cols, .x_pixel = opts.size.x_pixel, .y_pixel = opts.size.y_pixel, .console = .{ .passthrough = true } });
     errdefer p.pty.close(io);
     p.child = try conduit.Child.spawn(gpa, io, .{
         .argv = opts.argv,
         .cwd = opts.cwd,
-        .environ = &env,
+        .environ = opts.environ,
         .stdio = .{ .pty = &p.pty },
         // a session of its own on POSIX, so its terminal is its controlling one and Ctrl-C reaches it
         .detach = !is_windows,
         .descendants = .contain,
-        .extra_fds = if (ends) |e| &.{e[1]} else &.{},
+        .channel = if (ends) |e| .{ .file = e.child, .variable = hp.env_name } else null,
     });
     errdefer p.child.deinit(io);
     if (!is_windows) p.pty.closeSlave(io);
-    if (ends) |e| p.channel = try openChannel(gpa, e[0]);
+    if (ends) |e| p.channel = try openChannel(gpa, e.parent);
     errdefer if (p.channel) |*ch| closeChannel(gpa, io, ch);
     try p.tasks.concurrent(io, readOutput, .{p});
     if (p.channel) |*ch| {
@@ -240,19 +234,6 @@ fn closeChannel(gpa: std.mem.Allocator, io: std.Io, ch: *Channel) void {
     for (ch.rooms) |r| gpa.free(r);
 }
 
-// A connected pair of Unix stream sockets, both ends close-on-exec: hull's, and the program's, which the spawn
-// places at its descriptor 3. The standard library and conduit make pipes, which go one way; the channel goes both.
-fn socketPair() ![2]std.Io.File {
-    var fds: [2]std.c.fd_t = undefined;
-    if (std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &fds) != 0) return error.SocketPair;
-    for (fds) |f| _ = std.c.fcntl(f, std.c.F.SETFD, @as(c_int, std.c.FD_CLOEXEC));
-    return .{ fileOf(fds[0]), fileOf(fds[1]) };
-}
-
-fn fileOf(fd: std.c.fd_t) std.Io.File {
-    return .{ .handle = fd, .flags = .{ .nonblocking = false } };
-}
-
 // Takes what the program writes until `want` has all been seen or a second has passed.
 fn awaitOutput(p: *Program, want: []const u8, seen: *std.ArrayList(u8)) !void {
     var buf: [256]u8 = undefined;
@@ -275,7 +256,7 @@ test "the program on a terminal of its own, its channel both ways, and how it en
     try env.put("PATH", "/usr/bin:/bin");
     var p: Program = undefined;
     // it says it has a terminal, says a word on the channel, and writes back to its terminal what it hears there
-    const script = "test -t 0 && printf tty; printf said >&3; head -c 5 <&3; printf done; exit 3";
+    const script = "test -t 0 && printf tty; printf said >&$HULL_SOCKET; head -c 5 <&$HULL_SOCKET; printf done; exit 3";
     try p.start(std.testing.allocator, io, .{ .argv = &.{ "/bin/sh", "-c", script }, .environ = &env, .size = .{ .rows = 24, .cols = 80 } });
     defer p.stop();
     var seen: std.ArrayList(u8) = .empty;

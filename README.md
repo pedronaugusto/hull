@@ -81,8 +81,9 @@ The app sets everything; nothing is read from the user's terminal configuration.
 ## What a program sees
 
 `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=hull`, `HULL=<version>`, `HULL_APP=<id>`, and
-`HULL_SOCKET=fd:3`: the channel to hull's settings, on POSIX. Its presence is how a program knows it runs in hull. Other
-terminals' variables (TMUX, KITTY_*, GHOSTTY_*, ITERM_*, ...) are removed. XTVERSION answers `hull <version>`.
+`HULL_SOCKET`: the channel to hull's settings, conduit's, opened with `conduit.tty.Channel.inherited`. Its presence
+is how a program knows it runs in hull. Other terminals' variables (TMUX, KITTY_*, GHOSTTY_*, ITERM_*, ...) are
+removed. XTVERSION answers `hull <version>`.
 
 hull-protocol frames JSON lines: `hello` (every setting: its kind, range or values, a toggle's two words, its
 default and value, hull's words, `available` and `reason`), `set`, `changed` (any change, whoever made it,

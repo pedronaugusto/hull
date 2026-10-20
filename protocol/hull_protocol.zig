@@ -1,9 +1,10 @@
 //! hull-protocol: how a program inside hull sees hull's settings, and
 //! changes them. std and strand alone: no terminal, no window.
 //!
-//! hull hands the program one end of a socket and names it in the
-//! environment: `HULL_SOCKET=fd:3`. Its presence is how a program learns it
-//! runs in hull; in a plain terminal it is absent and nothing here applies.
+//! hull hands the program its end of a conduit `Channel` (a socket on POSIX,
+//! a duplex pipe on Windows) and names it in the environment: `HULL_SOCKET`,
+//! which a program opens with `conduit.tty.Channel.inherited`. Its presence
+//! is how a program learns it runs in hull; in a plain terminal it is absent and nothing here applies.
 //! Over it go newline-framed JSON lines, one `Message` each, tagged by
 //! `kind`:
 //!
@@ -23,7 +24,7 @@ const strand = @import("strand");
 
 pub const protocol_version = 1;
 
-/// The environment variable that names the channel: `fd:<n>`.
+/// The environment variable that names the channel, as conduit names a channel's end: its descriptor or handle.
 pub const env_name = "HULL_SOCKET";
 
 /// Any JSON value: a number, a string or a boolean here.
@@ -86,13 +87,6 @@ pub fn write(w: *std.Io.Writer, m: Message) !void {
 /// One line (without its newline) as a message, its strings on `arena`.
 pub fn read(arena: std.mem.Allocator, line: []const u8) !Message {
     return strand.json.parseLeaky(Message, arena, line, .{ .ignore_unknown_fields = true });
-}
-
-/// The channel's descriptor from `HULL_SOCKET`'s value, or null.
-pub fn fd(value: ?[]const u8) ?i32 {
-    const v = value orelse return null;
-    if (!std.mem.startsWith(u8, v, "fd:")) return null;
-    return std.fmt.parseInt(i32, v[3..], 10) catch null;
 }
 
 /// A number value, written as JSON writes it.
@@ -174,7 +168,6 @@ test "a hello and a set, there and back" {
     const set = try read(a, it.next().?);
     try std.testing.expectEqual(@as(?f64, 90), asNumber(set.set.value));
     try std.testing.expect((try read(a, it.next().?)) == .get);
-    try std.testing.expectEqual(@as(?i32, 3), fd("fd:3"));
 }
 
 test "lines arrive in pieces, and one too long is refused" {

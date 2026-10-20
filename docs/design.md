@@ -58,10 +58,8 @@ is the terminal it runs in, owned by the app. What is built is marked so; the re
 - **Linux:** the runner builds; an AppImage is to come.
 - **Windows:** the runner builds. The program runs on a pseudoconsole asked for passthrough, so the program's own
   bytes reach the terminal rather than the console host's redraw of them (which drops what it does not know,
-  kitty pictures among them); a Windows too old for passthrough gets the redraw. A child on a pseudoconsole is
-  given no handles of its own, so the settings channel needs another way in there: a named pipe named in
-  `HULL_SOCKET`, which belongs in conduit as a channel to a child. Until then a program on Windows runs without
-  hull's settings.
+  kitty pictures among them); a Windows too old for passthrough gets the redraw. The settings channel is conduit's
+  duplex pipe, inherited beside the pseudoconsole. Not yet run there.
 
 ## Invariants
 
