@@ -10,6 +10,12 @@ hull packages a terminal program as a desktop app. The program runs on a pseudo-
 
 Status: **0.0.0**, private. macOS works; Linux and Windows build. MIT.
 
+## Stability
+
+hull is 0.x and tracks Zig 0.17.x. A breaking change comes only in a minor release
+(0.1 to 0.2), with a CHANGELOG entry saying what changed and what to write instead; a
+patch release never breaks.
+
 ## An app from its own build
 
 The app's repository carries its `hull.zon` and icon; its build makes the app:
