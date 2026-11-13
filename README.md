@@ -8,7 +8,7 @@ hull packages a terminal program as a desktop app. The program runs on a pseudo-
 - Settings a program can read and change while it runs, over `hull-protocol`.
 - A bundle made from the app's own build with `addApp`.
 
-Status: **0.0.0**. CI builds and tests it on x86_64 and aarch64 Linux; its window is developed on macOS.
+Status: **0.0.0**. CI runs its tests on x86_64 Linux and compiles it for aarch64 Linux; its window is developed on macOS.
 
 ## Scope
 
