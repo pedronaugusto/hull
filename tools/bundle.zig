@@ -23,7 +23,13 @@ pub fn main(init: std.process.Init) !void {
     if (args.len == 4 and std.mem.eql(u8, args[1], "--check")) return check(io, arena, args[2], args[3]);
     if (args.len != 6) return usage();
     const zon = try Dir.cwd().readFileAllocOptions(io, args[3], arena, .limited(1 << 20), .of(u8), 0);
-    const app = try config.parse(arena, arena, zon);
+    const app = switch (try config.parse(arena, arena, zon)) {
+        .app => |a| a,
+        .refused => |refusals| {
+            config.logRefusals(args[3], refusals);
+            return error.BadConfig;
+        },
+    };
     try bundle(io, arena, app, .{ .runner = args[1], .program = args[2], .config = args[3], .icon = if (std.mem.eql(u8, args[4], "-")) null else args[4], .out = args[5] });
 }
 

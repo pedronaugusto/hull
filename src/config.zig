@@ -106,19 +106,67 @@ pub fn clampOpacity(v: i64) u8 {
 
 pub const PaletteEntry = struct { index: u8, color: []const u8 };
 
-/// Parses hull.zon. Strings live in `arena`.
-pub fn parse(gpa: std.mem.Allocator, arena: std.mem.Allocator, source: [:0]const u8) !App {
+/// Something hull.zon was refused for, and where: a line and a column, each from 1.
+pub const Refusal = struct {
+    line: usize,
+    column: usize,
+    message: []const u8,
+};
+
+/// What `parse` read: the app, or what it was refused for (at least one refusal).
+pub const Parsed = union(enum) {
+    app: App,
+    refused: []const Refusal,
+};
+
+/// Parses hull.zon, saying what it refuses rather than logging it: the caller decides who hears. Strings and
+/// refusals live in `arena`.
+pub fn parse(gpa: std.mem.Allocator, arena: std.mem.Allocator, source: [:0]const u8) error{OutOfMemory}!Parsed {
     var diag: std.zon.parse.Diagnostics = undefined;
-    var app_ = std.zon.parse.fromSlice(App, .{ .gpa = gpa, .arena = arena, .source = source, .diagnostics = &diag }) catch |err| {
-        if (err == error.ParseZon) diag.log("hull.zon");
-        return err;
+    var app_ = std.zon.parse.fromSlice(App, .{ .gpa = gpa, .arena = arena, .source = source, .diagnostics = &diag }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.ParseZon => {
+            const out = try arena.alloc(Refusal, diag.errors.len);
+            for (out, diag.errors) |*r, e| r.* = .{ .line = e.loc.line + 1, .column = e.loc.column + 1, .message = try arena.dupe(u8, e.msg) };
+            return .{ .refused = out };
+        },
     };
     app_.terminal.background_opacity = clampOpacity(app_.terminal.background_opacity);
+    var refused: std.ArrayList(Refusal) = .empty;
     for ([_][]const []const u8{ &.{app_.terminal.theme}, app_.terminal.featured_themes }) |names| for (names) |n| if (theme.byName(n) == null) {
-        std.log.err("hull.zon: no theme is named '{s}': Ghostty's names, lower case, words joined by '-'", .{n});
-        return error.UnknownTheme;
+        const at = try written(arena, source, n);
+        try refused.append(arena, .{ .line = at.line, .column = at.column, .message = try arena.print("no theme is named '{s}': Ghostty's names, lower case, words joined by '-'", .{n}) });
     };
-    return app_;
+    if (refused.items.len > 0) return .{ .refused = refused.items };
+    return .{ .app = app_ };
+}
+
+/// Where the string `value` is written in `source`: the first string literal that reads as it. One the parse
+/// read is always there.
+fn written(arena: std.mem.Allocator, source: [:0]const u8, value: []const u8) error{OutOfMemory}!struct { line: usize, column: usize } {
+    var tokens: std.zig.Tokenizer = .init(source);
+    var start: usize = 0;
+    while (true) {
+        const token = tokens.next();
+        if (token.tag == .eof) break;
+        if (token.tag != .string_literal) continue;
+        const read = std.zig.string_literal.parseAlloc(arena, source[token.loc.start..token.loc.end]) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidLiteral => continue,
+        };
+        if (std.mem.eql(u8, read, value)) {
+            start = token.loc.start;
+            break;
+        }
+    }
+    const line = std.mem.countScalar(u8, source[0..start], '\n') + 1;
+    const line_start = if (std.mem.findScalarLast(u8, source[0..start], '\n')) |nl| nl + 1 else 0;
+    return .{ .line = line, .column = start - line_start + 1 };
+}
+
+/// Logs each of `refusals`, under `path`, for a person to read.
+pub fn logRefusals(path: []const u8, refusals: []const Refusal) void {
+    for (refusals) |r| std.log.err("{s}:{d}:{d}: {s}", .{ path, r.line, r.column, r.message });
 }
 
 /// The colours an app's terminal starts with: its theme with its overrides.
@@ -142,9 +190,9 @@ fn rgb(s: []const u8) !theme.Rgb {
 test "parse an app" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    const app = try parse(std.testing.allocator, arena.allocator(),
+    const app = (try parse(std.testing.allocator, arena.allocator(),
         \\.{ .name = "Example", .program = .{"example"}, .terminal = .{ .font_size = 16, .background_opacity = 50 } }
-    );
+    )).app;
     try std.testing.expectEqualStrings("Example", app.name);
     try std.testing.expectEqual(@as(f32, 16), app.terminal.font_size);
     try std.testing.expectEqual(@as(u8, 80), app.terminal.background_opacity);
@@ -161,7 +209,7 @@ test "any hull.zon parses or is refused, never crashes" {
             input[seed.len + n] = 0;
             var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
             defer arena.deinit();
-            _ = parse(std.testing.allocator, arena.allocator(), input[0 .. seed.len + n :0]) catch return;
+            _ = try parse(std.testing.allocator, arena.allocator(), input[0 .. seed.len + n :0]);
         }
     }.one, .{});
 }

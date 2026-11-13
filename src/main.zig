@@ -77,12 +77,7 @@ pub fn main(init: std.process.Init) !void {
     const exe_dir = try std.process.executableDirPathAlloc(io, arena);
     const bundled = try std.fs.path.join(arena, &.{ exe_dir, "..", "Resources" });
     const dir = app_dir orelse if (exists(io, try std.fs.path.join(arena, &.{ bundled, "hull.zon" }))) bundled else null;
-    var app: config.App = .{};
-    if (dir) |d| {
-        const path = try std.fs.path.join(arena, &.{ d, "hull.zon" });
-        const src = try input.readSource(io, path, arena, input.app_limit);
-        app = try config.parse(gpa, arena, src);
-    }
+    var app: config.App = if (dir) |d| try readApp(gpa, io, arena, d) else .{};
     if (theme_name) |t| app.terminal.theme = t;
     if (opacity) |o| app.terminal.background_opacity = config.clampOpacity(o);
     if (size) |sz| {
@@ -138,6 +133,19 @@ pub fn main(init: std.process.Init) !void {
         .diag = init.environ_map.get("HULL_DIAG") != null,
         .io = io,
     });
+}
+
+// The app in `dir`'s hull.zon; what it was refused for is logged.
+fn readApp(gpa: std.mem.Allocator, io: std.Io, arena: std.mem.Allocator, dir: []const u8) !config.App {
+    const path = try std.fs.path.join(arena, &.{ dir, "hull.zon" });
+    const src = try input.readSource(io, path, arena, input.app_limit);
+    return switch (try config.parse(gpa, arena, src)) {
+        .app => |a| a,
+        .refused => |refusals| {
+            config.logRefusals(path, refusals);
+            return error.BadConfig;
+        },
+    };
 }
 
 fn fontBytes(io: std.Io, arena: std.mem.Allocator, dir: ?[]const u8, t: config.Terminal) !font.Fonts.Bytes {
