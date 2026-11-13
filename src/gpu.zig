@@ -99,7 +99,10 @@ pub const Gpu = struct {
     fn atlasUpload(ptr: *anyopaque, r: Rect, pixels: []const u8) void {
         const g = self(ptr);
         const n = @as(usize, r.w) * r.h;
-        g.scratch.resize(g.gpa, n * 4) catch return;
+        g.scratch.resize(g.gpa, n * 4) catch |err| {
+            std.log.warn("glyphs not uploaded: {t}", .{err});
+            return;
+        };
         for (0..n) |i| g.scratch.items[i * 4 ..][0..4].* = .{ 255, 255, 255, pixels[i] };
         // SDL keeps the draws queued before an update ahead of it
         _ = c.SDL_UpdateTexture(g.atlas, &sdlRect(r), g.scratch.items.ptr, @intCast(r.w * 4));
@@ -162,7 +165,10 @@ pub const Gpu = struct {
         defer c.SDL_DestroySurface(rgba);
         const w: u32 = @intCast(rgba.*.w);
         const h: u32 = @intCast(rgba.*.h);
-        g.snap.resize(g.gpa, @as(usize, w) * h) catch return;
+        g.snap.resize(g.gpa, @as(usize, w) * h) catch |err| {
+            std.log.warn("the frame not kept: {t}", .{err});
+            return;
+        };
         const pitch: usize = @intCast(rgba.*.pitch);
         const bytes: [*]const u8 = @ptrCast(rgba.*.pixels.?); // safe: the surface's pixels, RGBA32 as converted
         for (0..h) |y| for (0..w) |x| {

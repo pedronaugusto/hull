@@ -79,7 +79,10 @@ pub const Cpu = struct {
 
     fn image(ptr: *anyopaque, key: u64, w: u32, h: u32, rgba: []const u8) void {
         const p = self(ptr);
-        const px = p.gpa.alloc(u32, @as(usize, w) * h) catch return;
+        const px = p.gpa.alloc(u32, @as(usize, w) * h) catch |err| {
+            std.log.warn("a picture not drawn: {t}", .{err});
+            return;
+        };
         for (px, 0..) |*o, i| o.* = premul(.{ .r = rgba[i * 4], .g = rgba[i * 4 + 1], .b = rgba[i * 4 + 2], .a = rgba[i * 4 + 3] });
         if (p.images.fetchRemove(key)) |old| p.gpa.free(old.value.px);
         p.images.put(p.gpa, key, .{ .w = w, .h = h, .px = px }) catch p.gpa.free(px);

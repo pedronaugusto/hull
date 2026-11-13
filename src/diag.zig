@@ -2,17 +2,14 @@
 //! the memory it holds, and the spread of what it measured.
 const std = @import("std");
 const builtin = @import("builtin");
+const Span = @import("session.zig").Span;
 
-pub fn saveSnap(gpa: std.mem.Allocator, path: []const u8, px: []u32, w: u32, h: u32) void {
+pub fn saveSnap(gpa: std.mem.Allocator, io: std.Io, path: []const u8, px: []u32, w: u32, h: u32) !void {
     const png = @import("png.zig");
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
-    png.write(gpa, .{ .px = px, .w = w, .h = h }, &out.writer) catch return;
-    const z = gpa.dupeSentinel(u8, path, 0) catch return;
-    defer gpa.free(z);
-    const f = std.c.fopen(z.ptr, "w") orelse return;
-    _ = std.c.fwrite(out.written().ptr, 1, out.written().len, f);
-    _ = std.c.fclose(f);
+    try png.write(gpa, .{ .px = px, .w = w, .h = h }, &out.writer);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = out.written() });
     std.log.info("{s}: the window's frame, {d}x{d} px", .{ path, w, h });
 }
 
@@ -32,8 +29,6 @@ pub const RusageInfoV2 = extern struct {
 };
 extern "c" fn proc_pid_rusage(pid: c_int, flavor: c_int, buffer: *RusageInfoV2) c_int;
 pub extern "c" fn getpid() c_int;
-pub const Timebase = extern struct { numer: u32, denom: u32 };
-pub extern "c" fn mach_timebase_info(info: *Timebase) c_int;
 
 pub fn usage(pid: c_int) ?RusageInfoV2 {
     if (builtin.os.tag != .macos) return null;
@@ -42,15 +37,20 @@ pub fn usage(pid: c_int) ?RusageInfoV2 {
     return ri;
 }
 
-pub fn stat(o: *std.Io.Writer, name: []const u8, xs: []u64) !void {
+/// The spread of `xs`, sorted here, as one line in milliseconds.
+pub fn stat(o: *std.Io.Writer, name: []const u8, xs: []Span) !void {
     if (xs.len == 0) return o.print("{s}: none\n", .{name});
-    std.mem.sort(u64, xs, {}, std.sort.asc(u64));
-    var sum: u64 = 0;
-    for (xs) |x| sum += x;
-    const f = struct {
-        fn ms(ns: u64) f64 {
-            return @as(f64, @floatFromInt(ns)) / 1e6;
-        }
-    }.ms;
-    try o.print("{s}: n={d} mean {d:.2} ms, p50 {d:.2}, p95 {d:.2}, max {d:.2}\n", .{ name, xs.len, f(sum / xs.len), f(xs[xs.len / 2]), f(xs[@min(xs.len - 1, xs.len * 95 / 100)]), f(xs[xs.len - 1]) });
+    std.mem.sort(Span, xs, {}, shorter);
+    var sum: Span = .fromRaw(0);
+    for (xs) |x| sum = sum.saturatingAdd(x);
+    const mean = try sum.divTrunc(@intCast(xs.len)); // safe: a count of samples fits an i96
+    try o.print("{s}: n={d} mean {d:.2} ms, p50 {d:.2}, p95 {d:.2}, max {d:.2}\n", .{ name, xs.len, ms(mean), ms(xs[xs.len / 2]), ms(xs[@min(xs.len - 1, xs.len * 95 / 100)]), ms(xs[xs.len - 1]) });
+}
+
+fn shorter(_: void, a: Span, b: Span) bool {
+    return a.compare(b) == .lt;
+}
+
+fn ms(span: Span) f64 {
+    return span.toSeconds(f64) * 1000;
 }

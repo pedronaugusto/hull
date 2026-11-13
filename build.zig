@@ -25,8 +25,15 @@ pub fn build(b: *std.Build) error{LazyDependencyNeeded}!void {
         .imports = &.{.{ .name = "strand", .module = strand }},
     });
     if (!with_runner) return;
-    const themes = try themesTable(b);
-    const runner = b.addExecutable(.{ .name = "hull", .root_module = try runnerModule(b, target, optimize, protocol, strand, themes) });
+    const themes = themesTable(b, try b.dependencyLazy("ghostty_themes", .{}));
+    const deps: RunnerDeps = .{
+        .ghostty = try b.dependencyLazy("ghostty", ghosttyArgs(target)),
+        .sdl = try b.dependencyLazy("sdl", .{ .target = target, .optimize = optimize }),
+        .ztypeset = try b.dependencyLazy("ztypeset", .{ .target = target, .optimize = optimize }),
+        .aegis = try b.dependencyLazy("aegis", .{ .target = target, .optimize = optimize }),
+        .conduit = try b.dependencyLazy("conduit", .{ .target = target, .optimize = optimize }),
+    };
+    const runner = b.addExecutable(.{ .name = "hull", .root_module = runnerModule(b, target, optimize, protocol, strand, themes, deps) });
     b.installArtifact(runner);
     const run = b.addRunArtifact(runner);
     run.addPassthruArgs();
@@ -90,8 +97,16 @@ pub fn dev(b: *std.Build, tools: type) void {
     const test_step = b.step("test", "Run the tests");
     const strand = p.dependency("strand", .{ .target = target, .optimize = optimize }).module("strand");
     const protocol = hull.module("hull-protocol");
-    const themes = themesTable(p) catch return;
-    const units = b.addTest(.{ .name = "hull-tests", .filters = filters, .root_module = runnerModule(p, target, optimize, protocol, strand, themes) catch return });
+    // `dependency` fetches a lazy one itself: it ends this pass and runs the build again once it has it
+    const themes = themesTable(p, p.dependency("ghostty_themes", .{}));
+    const deps: RunnerDeps = .{
+        .ghostty = p.dependency("ghostty", ghosttyArgs(target)),
+        .sdl = p.dependency("sdl", .{ .target = target, .optimize = optimize }),
+        .ztypeset = p.dependency("ztypeset", .{ .target = target, .optimize = optimize }),
+        .aegis = p.dependency("aegis", .{ .target = target, .optimize = optimize }),
+        .conduit = p.dependency("conduit", .{ .target = target, .optimize = optimize }),
+    };
+    const units = b.addTest(.{ .name = "hull-tests", .filters = filters, .root_module = runnerModule(p, target, optimize, protocol, strand, themes, deps) });
     // The properties of hull.zon and hull-protocol: shakedown, in the development graph alone.
     const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize }).module("shakedown");
     units.root_module.addImport("shakedown", shakedown);
@@ -118,8 +133,7 @@ pub fn dev(b: *std.Build, tools: type) void {
 }
 
 // Ghostty's themes as hull's table, written by `tools/themes.zig` where hull is built from the folder Ghostty pins.
-fn themesTable(b: *std.Build) error{LazyDependencyNeeded}!std.Build.LazyPath {
-    const folder = try b.dependencyLazy("ghostty_themes", .{});
+fn themesTable(b: *std.Build, folder: *std.Build.Dependency) std.Build.LazyPath {
     const tool = b.addExecutable(.{ .name = "hull-themes", .root_module = b.createModule(.{
         .root_source_file = b.path("tools/themes.zig"),
         .target = b.graph.host,
@@ -130,16 +144,29 @@ fn themesTable(b: *std.Build) error{LazyDependencyNeeded}!std.Build.LazyPath {
     return run.addOutputFileArg2("themes.zig", .{});
 }
 
-// The runner: libghostty-vt from Ghostty's Zig 0.17 tree, SDL3 for the window, ztypeset for the type, conduit for
-// the program, each a lazy dependency that asking for it here fetches.
-fn runnerModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, protocol: *std.Build.Module, strand: *std.Build.Module, themes: std.Build.LazyPath) error{LazyDependencyNeeded}!*std.Build.Module {
-    // ReleaseFast whatever hull is built as: Debug terminal code is very slow, and its checks are Ghostty's to
-    // run. No SIMD: its paths are C++ (simdutf, highway) the static archive does not carry at this commit.
-    const ghostty = try b.dependencyLazy("ghostty", .{ .target = target, .optimize = .fast, .simd = false });
-    const sdl = try b.dependencyLazy("sdl", .{ .target = target, .optimize = optimize });
-    const zt = try b.dependencyLazy("ztypeset", .{ .target = target, .optimize = optimize });
-    const aegis = try b.dependencyLazy("aegis", .{ .target = target, .optimize = optimize });
-    const conduit = try b.dependencyLazy("conduit", .{ .target = target, .optimize = optimize });
+// The runner's dependencies, each lazy: libghostty-vt from Ghostty's Zig 0.17 tree, SDL3 for the window, ztypeset
+// for the type, conduit for the program.
+const RunnerDeps = struct {
+    ghostty: *std.Build.Dependency,
+    sdl: *std.Build.Dependency,
+    ztypeset: *std.Build.Dependency,
+    aegis: *std.Build.Dependency,
+    conduit: *std.Build.Dependency,
+};
+
+// ReleaseFast whatever hull is built as: Debug terminal code is very slow, and its checks are Ghostty's to run. No
+// SIMD: its paths are C++ (simdutf, highway) the static archive does not carry at this commit.
+fn ghosttyArgs(target: std.Build.ResolvedTarget) struct { target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, simd: bool } {
+    return .{ .target = target, .optimize = .fast, .simd = false };
+}
+
+// The runner's module, on its dependencies.
+fn runnerModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, protocol: *std.Build.Module, strand: *std.Build.Module, themes: std.Build.LazyPath, deps: RunnerDeps) *std.Build.Module {
+    const ghostty = deps.ghostty;
+    const sdl = deps.sdl;
+    const zt = deps.ztypeset;
+    const aegis = deps.aegis;
+    const conduit = deps.conduit;
     const vt_h = b.addTranslateC(.{ .root_source_file = ghostty.path("include/ghostty/vt.h"), .target = target, .optimize = optimize });
     vt_h.addIncludePath(ghostty.path("include"));
     vt_h.defineCMacro("GHOSTTY_STATIC", null);

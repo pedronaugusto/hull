@@ -6,9 +6,11 @@ const std = @import("std");
 const builtin = @import("builtin");
 const hp = @import("hull-protocol");
 const config = @import("config.zig");
+const input = @import("input.zig");
 const theme = @import("theme.zig");
 const Session = @import("session.zig").Session;
 const version = @import("vt.zig").version;
+const log = std.log.scoped(.hull);
 
 /// hull's words for its settings, by name: what a settings page shows when
 /// the program has no words of its own for one.
@@ -107,15 +109,22 @@ pub const Settings = struct {
     /// ~/Library/Application Support/<id>/hull-settings.json on macOS,
     /// $XDG_CONFIG_HOME/<id>/ (~/.config) elsewhere.
     pub fn load(st: *Settings, io: std.Io, env: *const std.process.Environ.Map, id: []const u8) void {
+        st.read(io, env, id) catch |err| switch (err) {
+            error.FileNotFound => {}, // nothing chosen yet
+            else => log.warn("{s}: {t}; the app's own settings stand", .{ st.path orelse id, err }),
+        };
+    }
+
+    fn read(st: *Settings, io: std.Io, env: *const std.process.Environ.Map, id: []const u8) !void {
         const a = st.arena.allocator();
         const home = env.get("HOME") orelse return;
         const dir = if (builtin.os.tag == .macos)
-            std.fs.path.join(a, &.{ home, "Library", "Application Support", id }) catch return
+            try std.fs.path.join(a, &.{ home, "Library", "Application Support", id })
         else
-            std.fs.path.join(a, &.{ env.get("XDG_CONFIG_HOME") orelse (std.fs.path.join(a, &.{ home, ".config" }) catch return), id }) catch return;
-        st.path = std.fs.path.join(a, &.{ dir, "hull-settings.json" }) catch return;
-        const bytes = std.Io.Dir.cwd().readFileAlloc(io, st.path.?, a, .limited(64 * 1024)) catch return;
-        const saved = @import("strand").json.parseLeaky(Saved, a, bytes, .{ .ignore_unknown_fields = true }) catch return;
+            try std.fs.path.join(a, &.{ env.get("XDG_CONFIG_HOME") orelse try std.fs.path.join(a, &.{ home, ".config" }), id });
+        st.path = try std.fs.path.join(a, &.{ dir, "hull-settings.json" });
+        const bytes = try input.read(io, st.path.?, a, input.settings_limit);
+        const saved = try @import("strand").json.parseLeaky(Saved, a, bytes, .{ .ignore_unknown_fields = true });
         if (saved.theme) |v| if (theme.byName(v) != null) {
             st.theme = v;
         };
@@ -127,19 +136,23 @@ pub const Settings = struct {
 
     fn save(st: *Settings, io: std.Io) void {
         const path = st.path orelse return;
-        std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(path).?) catch return;
-        const file = std.Io.Dir.cwd().createFile(io, path, .{}) catch return;
+        st.write(io, path) catch |err| log.warn("{s}: {t}; the choice holds until the app closes", .{ path, err });
+    }
+
+    fn write(st: *Settings, io: std.Io, path: []const u8) !void {
+        try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(path).?);
+        const file = try std.Io.Dir.cwd().createFile(io, path, .{});
         defer file.close(io);
         var buf: [1024]u8 = undefined;
         var w = file.writer(io, &buf);
-        @import("strand").json.write(&w.interface, Saved{
+        try @import("strand").json.write(&w.interface, Saved{
             .theme = st.theme,
             .background_opacity = st.opacity,
             .font_size = st.font_size,
             .padding = st.padding,
             .fullscreen = st.fullscreen,
-        }, .{}) catch return;
-        w.interface.flush() catch return;
+        }, .{});
+        try w.interface.flush();
     }
 
     /// Every setting as the protocol states it.
@@ -179,7 +192,10 @@ pub const Settings = struct {
     pub fn hello(st: *Settings, s: *Session) void {
         var arena: std.heap.ArenaAllocator = .init(st.gpa);
         defer arena.deinit();
-        const all = st.describe(arena.allocator()) catch return;
+        const all = st.describe(arena.allocator()) catch |err| {
+            log.warn("the program not greeted: {t}", .{err});
+            return;
+        };
         st.send(s, .{ .hello = .{ .hull = version, .app = s.app.id, .settings = all } });
     }
 
@@ -187,7 +203,10 @@ pub const Settings = struct {
     pub fn changed(st: *Settings, s: *Session, name: []const u8) void {
         var arena: std.heap.ArenaAllocator = .init(st.gpa);
         defer arena.deinit();
-        const one_ = (st.one(arena.allocator(), name) catch return) orelse return;
+        const one_ = (st.one(arena.allocator(), name) catch |err| {
+            log.warn("the program not told {s} changed: {t}", .{ name, err });
+            return;
+        }) orelse return;
         st.send(s, .{ .changed = .{ .setting = one_ } });
     }
 
@@ -197,7 +216,10 @@ pub const Settings = struct {
         if (!s.spawned or !s.program.talks()) return;
         var line: std.Io.Writer.Allocating = .init(st.gpa);
         defer line.deinit();
-        hp.write(&line.writer, m) catch return; // out of memory: the notice is lost, never hull
+        hp.write(&line.writer, m) catch |err| {
+            log.warn("a notice to the program lost: {t}", .{err}); // out of memory: the notice, never hull
+            return;
+        };
         _ = s.program.tell(line.written());
     }
 

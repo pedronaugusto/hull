@@ -8,6 +8,6 @@ pub fn main(init: std.process.Init) !void {
     try out.interface.flush();
     var in_buf: [64]u8 = undefined;
     var in = std.Io.File.stdin().reader(init.io, &in_buf);
-    // the window closing ends the input either way; how it ended changes nothing here
-    _ = in.interface.discardRemaining() catch return;
+    // the window closing ends the input; a terminal that hangs up may fail the read instead, which ends it too
+    _ = try in.interface.discardRemaining();
 }

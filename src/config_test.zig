@@ -18,7 +18,7 @@ test "any opacity written as a byte reads clamped to 80..100" {
             const a = state.allocator();
             const opacity = gen.intRange(case.source, u8, 0, 255);
             const name = gen.oneOf(case.source, []const u8, &.{ "rose-pine", "rose-pine-dawn", "dracula" });
-            const source = try std.fmt.allocPrintSentinel(a, ".{{ .name = \"Example\", .terminal = .{{ .background_opacity = {d}, .theme = \"{s}\" }} }}", .{ opacity, name }, 0);
+            const source = try a.printSentinel(".{{ .name = \"Example\", .terminal = .{{ .background_opacity = {d}, .theme = \"{s}\" }} }}", .{ opacity, name }, 0);
             const app = try config.parse(testing.allocator, a, source);
             try testing.expectEqual(std.math.clamp(opacity, 80, 100), app.terminal.background_opacity);
             try testing.expectEqualStrings(name, app.terminal.theme);

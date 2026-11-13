@@ -14,7 +14,7 @@ pub const Rgb = struct {
 
     pub fn hex(comptime s: []const u8) Rgb {
         @setEvalBranchQuota(10000);
-        const v = std.fmt.parseInt(u24, s[1..], 16) catch unreachable; // unreachable: the themes' colours are written in this file as #rrggbb
+        const v = std.fmt.parseInt(u24, s[1..], 16) catch unreachable; // glint-ignore: Z026 -- the themes' colours are written in this file as #rrggbb
         return .{ .r = @truncate(v >> 16), .g = @truncate(v >> 8), .b = @truncate(v) };
     }
 };

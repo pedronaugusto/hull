@@ -8,6 +8,7 @@
 //! Windows, the program's end named in `HULL_SOCKET`.
 const std = @import("std");
 const builtin = @import("builtin");
+const aegis = @import("aegis");
 const conduit = @import("conduit");
 const hp = @import("hull-protocol");
 
@@ -22,6 +23,10 @@ pub const max_heard = 64 * 1024;
 pub const max_told = 4 << 20;
 /// How long a program has to end once its terminal hangs up, before it is killed.
 const grace: conduit.Duration = .literal("500ms");
+/// How long a test waits before looking again.
+const poll: aegis.units.Duration(.millisecond, u32) = .literal("5ms");
+/// A count of bytes.
+const Bytes = aegis.units.Bytes(usize);
 
 gpa: std.mem.Allocator,
 io: std.Io,
@@ -54,13 +59,14 @@ pub const Options = struct {
     wake: ?Wake = null,
 };
 
-const Channel = struct {
-    file: std.Io.File,
+/// hull's end of the channel, the queues on each side of it, and what waits to go.
+pub const Channel = struct {
+    file: aegis.own.OwnedIo(std.Io.File, closeFile),
     heard: std.Io.Queue(u8),
     told: std.Io.Queue(u8),
     rooms: [2][]u8,
     /// What `told` holds and the writer has not yet written, so a line is taken only whole.
-    waiting: std.atomic.Value(usize) = .init(0),
+    waiting: aegis.Atomic(Bytes) = .init(.fromRaw(0)),
 };
 
 /// Starts the program in place: `p` must stay where it is until `stop`. The environment is the program's as given;
@@ -164,8 +170,10 @@ pub fn talks(p: *const Program) bool {
 /// `max_told` unread.
 pub fn tell(p: *Program, line: []const u8) bool {
     const ch = &(p.channel orelse return false);
-    if (ch.waiting.load(.acquire) + line.len > max_told) return false;
-    _ = ch.waiting.fetchAdd(line.len, .acq_rel);
+    const after = ch.waiting.load(.acquire).add(.fromRaw(line.len)) catch return false;
+    if (after.compare(.fromRaw(max_told)) == .gt) return false;
+    // within max_told and a line's length: never near usize's end
+    _ = ch.waiting.fetchAddWrapping(.fromRaw(line.len), .acq_rel);
     // never waits: what waits is counted, and the queue holds max_told
     _ = ch.told.putUncancelable(p.io, line, line.len) catch return false;
     return true;
@@ -194,7 +202,7 @@ fn readOutput(p: *Program) std.Io.Cancelable!void {
 fn readChannel(p: *Program, ch: *Channel) std.Io.Cancelable!void {
     var buf: [4096]u8 = undefined;
     while (true) {
-        const n = ch.file.readStreaming(p.io, &.{&buf}) catch |err| switch (err) {
+        const n = ch.file.borrow().readStreaming(p.io, &.{&buf}) catch |err| switch (err) {
             error.Canceled => return error.Canceled,
             else => return, // the program closed it: there is nothing more to hear
         };
@@ -214,11 +222,12 @@ fn writeChannel(io: std.Io, ch: *Channel) std.Io.Cancelable!void {
             error.Canceled => return error.Canceled,
             error.Closed => return,
         };
-        ch.file.writeStreamingAll(io, buf[0..n]) catch |err| switch (err) {
+        ch.file.borrow().writeStreamingAll(io, buf[0..n]) catch |err| switch (err) {
             error.Canceled => return error.Canceled,
             else => return, // the program closed it: what waits is never read
         };
-        _ = ch.waiting.fetchSub(n, .acq_rel);
+        // what was counted in before it was queued: never below zero
+        _ = ch.waiting.fetchSubWrapping(.fromRaw(n), .acq_rel);
     }
 }
 
@@ -226,11 +235,15 @@ fn openChannel(gpa: std.mem.Allocator, file: std.Io.File) !Channel {
     const heard = try gpa.alloc(u8, max_heard);
     errdefer gpa.free(heard);
     const told = try gpa.alloc(u8, max_told);
-    return .{ .file = file, .heard = .init(heard), .told = .init(told), .rooms = .{ heard, told } };
+    return .{ .file = .init(file), .heard = .init(heard), .told = .init(told), .rooms = .{ heard, told } };
+}
+
+fn closeFile(file: *std.Io.File, io: std.Io) void {
+    file.close(io);
 }
 
 fn closeChannel(gpa: std.mem.Allocator, io: std.Io, ch: *Channel) void {
-    ch.file.close(io);
+    ch.file.deinit(io);
     for (ch.rooms) |r| gpa.free(r);
 }
 
@@ -241,7 +254,7 @@ fn awaitOutput(p: *Program, want: []const u8, seen: *std.ArrayList(u8)) !void {
         const n = p.take(&buf) orelse 0;
         try seen.appendSlice(std.testing.allocator, buf[0..n]);
         if (std.mem.find(u8, seen.items, want) != null) return;
-        if (n == 0) try p.io.sleep(.fromMilliseconds(5), .awake);
+        if (n == 0) try p.io.sleep(poll.toIoDuration(), .awake);
     }
     // what it wrote instead, said by the failure
     try std.testing.expectEqualStrings(want, seen.items);
@@ -267,7 +280,7 @@ test "the program on a terminal of its own, its channel both ways, and how it en
     for (0..200) |_| {
         n += p.hear(heard[n..]);
         if (n >= 4) break;
-        try io.sleep(.fromMilliseconds(5), .awake);
+        try io.sleep(poll.toIoDuration(), .awake);
     }
     try std.testing.expectEqualStrings("said", heard[0..n]);
     try std.testing.expect(p.tell("back\n"));
@@ -275,7 +288,7 @@ test "the program on a terminal of its own, its channel both ways, and how it en
     try awaitOutput(&p, "done", &seen);
     for (0..200) |_| {
         if (p.status() != null) break;
-        try io.sleep(.fromMilliseconds(5), .awake);
+        try io.sleep(poll.toIoDuration(), .awake);
     }
     try std.testing.expectEqual(@as(?u8, 3), p.status());
 }

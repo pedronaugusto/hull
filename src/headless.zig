@@ -2,8 +2,10 @@
 //! moments, and the frame at a given moment written as a PNG by the same
 //! renderer the window uses. For tests, and for looking without a screen.
 const std = @import("std");
+const aegis = @import("aegis");
 const Session = @import("session.zig").Session;
 const now = @import("session.zig").now;
+const seconds = @import("session.zig").seconds;
 const vt_mod = @import("vt.zig");
 const c = vt_mod.c;
 const render = @import("render.zig");
@@ -48,7 +50,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, s: *Session, opts: Options) !void
     var shot: usize = 0;
     var sync_wait: ?f64 = null;
     while (shot < shots.items.len) {
-        const t = secs(io, start);
+        const t = seconds(start, now(io));
         while (next < opts.presses.len and opts.presses[next].at <= t) : (next += 1) s.key(opts.presses[next].key);
         if (t >= shots.items[shot]) {
             // A frame the program is in the middle of is waited for, as a
@@ -59,7 +61,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, s: *Session, opts: Options) !void
                 sync_wait = null;
                 const t0 = now(io);
                 const drawn = s.draw(&r);
-                const dt = @as(f64, @floatFromInt(now(io) - t0)) / 1e6;
+                const dt = seconds(t0, now(io)) * 1000;
                 const path = if (shot == 0 and shots.items.len == 1) opts.out else try numbered(gpa, opts.out, shot);
                 defer if (path.ptr != opts.out.ptr) gpa.free(path);
                 try save(gpa, io, cpu.canvas, path);
@@ -79,8 +81,8 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, s: *Session, opts: Options) !void
         _ = s.pump();
         if (s.output_bytes == before) {
             // nothing came: a short wait, never past the next moment
-            const wait_ms: i64 = @intFromFloat(std.math.clamp((until - secs(io, start)) * 1000, 0, 5)); // safe: clamped to 5
-            io.sleep(.fromMilliseconds(wait_ms), .awake) catch {}; // glint-ignore: Z026 -- canceled: the loop ends with hull
+            const wait: Milliseconds = .fromRaw(@intFromFloat(std.math.clamp((until - seconds(start, now(io))) * 1000, 0, 5))); // safe: clamped to 5
+            io.sleep(wait.toIoDuration(), .awake) catch {}; // glint-ignore: Z026 -- canceled: the loop ends with hull
         }
         switch (st.service(io, s)) {
             .fullscreen => st.windowFullscreen(s, st.fullscreen),
@@ -89,9 +91,8 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, s: *Session, opts: Options) !void
     }
 }
 
-fn secs(io: std.Io, start: u64) f64 {
-    return @as(f64, @floatFromInt(now(io) - start)) / 1e9;
-}
+/// A wait, to the millisecond.
+const Milliseconds = aegis.units.Duration(.millisecond, i64);
 
 fn numbered(gpa: std.mem.Allocator, out: []const u8, n: usize) ![]const u8 {
     const ext = std.fs.path.extension(out);

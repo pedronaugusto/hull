@@ -14,6 +14,7 @@
 //!     --fullscreen       headless: as if full screen (opaque; opacity unavailable)
 const std = @import("std");
 const config = @import("config.zig");
+const input = @import("input.zig");
 const font = @import("font.zig");
 const Session = @import("session.zig").Session;
 const headless = @import("headless.zig");
@@ -79,7 +80,7 @@ pub fn main(init: std.process.Init) !void {
     var app: config.App = .{};
     if (dir) |d| {
         const path = try std.fs.path.join(arena, &.{ d, "hull.zon" });
-        const src = try std.Io.Dir.cwd().readFileAllocOptions(io, path, arena, .limited(1 << 20), .of(u8), 0);
+        const src = try input.readSource(io, path, arena, input.app_limit);
         app = try config.parse(gpa, arena, src);
     }
     if (theme_name) |t| app.terminal.theme = t;
@@ -117,7 +118,10 @@ pub fn main(init: std.process.Init) !void {
     var fallback: std.ArrayList([]const u8) = .empty;
     for (app.terminal.font_fallback) |name| {
         const path = if (std.fs.path.isAbsolute(name)) name else if (dir) |d| try std.fs.path.join(arena, &.{ d, name }) else continue;
-        const b = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(64 << 20)) catch continue;
+        const b = input.read(io, path, arena, input.font_limit) catch |err| {
+            std.log.warn("{s}: {t}; drawn without it", .{ path, err });
+            continue;
+        };
         try fallback.append(arena, b);
     }
 
@@ -131,6 +135,7 @@ pub fn main(init: std.process.Init) !void {
     }
     try window.run(gpa, app, bytes, fallback.items, argv, init.environ_map, init.environ_map.get("HOME"), .{
         .snap = init.environ_map.get("HULL_SNAP"),
+        .diag = init.environ_map.get("HULL_DIAG") != null,
         .io = io,
     });
 }
@@ -142,7 +147,7 @@ fn fontBytes(io: std.Io, arena: std.mem.Allocator, dir: ?[]const u8, t: config.T
     if (names[0] != null) b = .{ "", "", "", "" };
     for (names, 0..) |n, i| if (n) |name| {
         const path = try std.fs.path.join(arena, &.{ d, name });
-        b[i] = try std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(64 << 20));
+        b[i] = try input.read(io, path, arena, input.font_limit);
     };
     for (&b) |*x| if (x.len == 0) {
         x.* = b[0];

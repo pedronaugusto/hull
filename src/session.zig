@@ -2,6 +2,7 @@
 //! drawn in and where the grid sits. The window and the headless runner
 //! both drive this; neither knows the other.
 const std = @import("std");
+const aegis = @import("aegis");
 const config = @import("config.zig");
 const theme = @import("theme.zig");
 const font = @import("font.zig");
@@ -12,9 +13,19 @@ const Program = @import("Program.zig");
 pub const Vt = vt_mod.Vt;
 const c = vt_mod.c;
 
-/// Nanoseconds on the awake clock, the one AppKit's event timestamps are on (CLOCK_UPTIME_RAW on macOS).
-pub fn now(io: std.Io) u64 {
-    return @intCast(std.Io.Clock.awake.now(io).nanoseconds); // safe: the awake clock counts up from boot
+/// A moment on the awake clock, the one AppKit's event timestamps are on (CLOCK_UPTIME_RAW on macOS).
+pub const Instant = aegis.units.Instant(.awake, .nanosecond, i96);
+/// The time between two moments.
+pub const Span = aegis.units.Duration(.nanosecond, i96);
+
+/// Now, on the awake clock.
+pub fn now(io: std.Io) Instant {
+    return .fromTimestamp(std.Io.Clock.awake.now(io), .exact);
+}
+
+/// The seconds from `start` to `end`, for a log line or a moment a run names.
+pub fn seconds(start: Instant, end: Instant) f64 {
+    return start.saturatingDurationTo(end).toSeconds(f64);
 }
 
 /// Variables that would tell the program it runs in another terminal.
@@ -44,9 +55,6 @@ pub const Session = struct {
     /// The canvas size, device pixels.
     w: u32,
     h: u32,
-    started_ns: u64,
-    first_frame_ns: ?u64 = null,
-    first_image_ns: ?u64 = null,
     /// Bytes the program has written.
     output_bytes: u64 = 0,
 
@@ -67,7 +75,6 @@ pub const Session = struct {
             .layout = undefined,
             .w = 0,
             .h = 0,
-            .started_ns = now(io),
         };
         errdefer s.fonts.deinit();
         const cw = s.fonts.cell_w;
@@ -212,10 +219,6 @@ pub const Session = struct {
             r.resetGlyphs();
             r.epoch = s.font_epoch;
         }
-        const st = r.draw(&s.vt, &s.fonts, s.w, s.h, s.layout);
-        const t = now(s.io);
-        if (s.first_frame_ns == null and s.output_bytes > 0) s.first_frame_ns = t;
-        if (s.first_image_ns == null and st.images > 0) s.first_image_ns = t;
-        return st;
+        return r.draw(&s.vt, &s.fonts, s.w, s.h, s.layout);
     }
 };

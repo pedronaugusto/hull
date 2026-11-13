@@ -52,7 +52,10 @@ pub const Fonts = struct {
         }
         for (fallback) |fb| {
             if (f.fallbacks == f.fallback.len) break;
-            const ff = lib.createFont(fb, 0) catch continue;
+            const ff = lib.createFont(fb, 0) catch |err| {
+                std.log.warn("a fallback face refused: {t}; drawn without it", .{err});
+                continue;
+            };
             f.fallback[f.fallbacks] = ff;
             f.fallback_face[f.fallbacks] = ff.face(0, px) catch {
                 ff.deinit();

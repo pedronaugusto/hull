@@ -91,7 +91,7 @@ pub fn read(arena: std.mem.Allocator, line: []const u8) !Message {
 
 /// A number value, written as JSON writes it.
 pub fn number(buf: []u8, v: f64) Value {
-    const s = std.fmt.bufPrint(buf, "{d}", .{v}) catch "0";
+    const s = std.mem.print(buf, "{d}", .{v}) catch "0";
     return .{ .number = s };
 }
 
@@ -134,7 +134,7 @@ pub const Lines = struct {
         scratch.clearRetainingCapacity();
         try scratch.appendSlice(gpa, l.buf.items[0..nl]);
         const rest = l.buf.items.len - nl - 1;
-        std.mem.copyForwards(u8, l.buf.items[0..rest], l.buf.items[nl + 1 ..]);
+        @memmove(l.buf.items[0..rest], l.buf.items[nl + 1 ..]);
         l.buf.shrinkRetainingCapacity(rest);
         return scratch.items;
     }

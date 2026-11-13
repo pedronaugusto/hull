@@ -1,0 +1,60 @@
+{
+  "seams": [
+    {
+      "file": "src/vt.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "libghostty-vt's C API: the terminal's state read through its out-parameters, and its options set"
+    },
+    {
+      "file": "src/render.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "the frame read from libghostty-vt's render state and picture store, through its C out-parameters"
+    },
+    {
+      "file": "src/gpu.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "SDL's renderer: the frame read back from a surface's pixels"
+    },
+    {
+      "file": "src/font.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "FreeType's glyph bitmaps, as ztypeset hands them: a pointer and a pitch"
+    },
+    {
+      "file": "src/diag.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "macOS's process accounting (proc_pid_rusage), for HULL_DIAG"
+    },
+    {
+      "file": "src/input.zig",
+      "rules": [
+        "A009"
+      ],
+      "reason": "the files hull reads, an app's hull.zon and fonts and the saved settings, each whole under a limit, for their parsers"
+    },
+    {
+      "file": "src/Program.zig",
+      "rules": [
+        "A009"
+      ],
+      "reason": "the program's terminal output and its channel, read back for the terminal and the settings protocol"
+    },
+    {
+      "module": "tools/",
+      "rules": [
+        "A009"
+      ],
+      "reason": "build tools: the bundler reads the app it packs and the tools it runs, the themes step Ghostty's theme files"
+    }
+  ]
+}

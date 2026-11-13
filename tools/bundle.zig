@@ -125,7 +125,10 @@ fn icns(io: Io, arena: std.mem.Allocator, png_path: []const u8, out: []const u8)
 
 // An ad-hoc signature; a machine without codesign leaves the bundle unsigned.
 fn sign(io: Io, arena: std.mem.Allocator, path: []const u8) void {
-    const r = std.process.run(arena, io, .{ .argv = &.{ "codesign", "--force", "--sign", "-", path } }) catch return;
+    const r = std.process.run(arena, io, .{ .argv = &.{ "codesign", "--force", "--sign", "-", path } }) catch |err| {
+        std.log.info("{s}: left unsigned, codesign {t}", .{ path, err });
+        return;
+    };
     _ = r;
 }
 
