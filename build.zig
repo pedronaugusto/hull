@@ -92,10 +92,14 @@ pub fn dev(b: *std.Build, tools: type) void {
     const protocol = hull.module("hull-protocol");
     const themes = themesTable(p) catch return;
     const units = b.addTest(.{ .name = "hull-tests", .filters = filters, .root_module = runnerModule(p, target, optimize, protocol, strand, themes) catch return });
+    // The properties of hull.zon and hull-protocol: shakedown, in the development graph alone.
+    const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize }).module("shakedown");
+    units.root_module.addImport("shakedown", shakedown);
     const table_tests = b.addTest(.{ .name = "hull-themes-tests", .filters = filters, .root_module = b.createModule(.{ .root_source_file = p.path("tools/themes.zig"), .target = target, .optimize = optimize }) });
     test_step.dependOn(&b.addRunArtifact(table_tests).step);
     test_step.dependOn(&b.addRunArtifact(units).step);
     const protocol_tests = b.addTest(.{ .name = "hull-protocol-tests", .filters = filters, .root_module = protocol });
+    protocol_tests.root_module.addImport("shakedown", shakedown);
     test_step.dependOn(&b.addRunArtifact(protocol_tests).step);
 
     // an app as a program's build makes one: a program of its own, packaged, and its bundle checked

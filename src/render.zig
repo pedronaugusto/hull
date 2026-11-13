@@ -7,7 +7,7 @@
 //! pictures below cell backgrounds, the cells' own backgrounds, the
 //! pictures below text, the text and its lines, the cursor, the pictures
 //! above text. A picture is drawn pixel for pixel when its placement is
-//! its own size, as WAKE sizes them to whole cells, and by nearest
+//! its own size, as a program that sizes them to whole cells has them, and by nearest
 //! neighbour otherwise: never a filter that blurs a dither.
 const std = @import("std");
 const vt_mod = @import("vt.zig");

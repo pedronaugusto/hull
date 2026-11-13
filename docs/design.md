@@ -6,7 +6,7 @@ is the terminal it runs in, owned by the app. What is built is marked so; the re
 ## The boundary
 
 - **One program per window, unchanged.** A program knows nothing of hull unless it wants to: it runs on a pseudo-terminal
-  and draws as it would in any terminal. *Protects:* tycho, arcana, a lantern game and any visor program, packaged
+  and draws as it would in any terminal. *Protects:* any terminal program, a visor program or a game, packaged
   without a line changed.
 - **The app owns everything; the player's terminal nothing.** Font, theme, opacity, padding and window policy come
   from the app's `hull.zon`, never a terminal configuration. *Protects:* an app that looks the same on every
@@ -40,7 +40,7 @@ is the terminal it runs in, owned by the app. What is built is marked so; the re
 - **hull** owns the window and terminal: theme (any of Ghostty's, from the same pinned release, built into a table
   by `tools/themes.zig`; Rosé Pine by default, an app's `featured_themes` offered first), background opacity (80–100, 100 by default,
   windowed only), font size, padding, full screen.
-- **The program** owns its own; a lantern game's include lantern's look and reading settings.
+- **The program** owns its own; a game's include its look and reading settings.
 - A program learns it runs in hull from `HULL_SOCKET` and speaks `hull-protocol` (std and strand alone, and its
   build fetches nothing else: `.runner = false`, with the window's dependencies lazy): hull's
   settings declared with their kinds, values and availability, set, and changes told. A program's settings page

@@ -158,7 +158,7 @@ test "a hello and a set, there and back" {
         .available = false,
         .reason = "Full screen is always opaque",
     }};
-    try write(&out.writer, .{ .hello = .{ .hull = "0.0.0", .app = "dev.wake", .settings = &settings } });
+    try write(&out.writer, .{ .hello = .{ .hull = "0.0.0", .app = "dev.example", .settings = &settings } });
     try write(&out.writer, .{ .set = .{ .name = "background_opacity", .value = .{ .number = "90" } } });
     try write(&out.writer, .get);
     var it = std.mem.splitScalar(u8, out.written(), '\n');
@@ -185,4 +185,8 @@ test "lines arrive in pieces, and one too long is refused" {
     @memset(long, 'x');
     try std.testing.expectError(error.LineTooLong, lines.feed(gpa, long));
     try std.testing.expectEqual(@as(?[]const u8, null), try lines.next(&scratch, gpa));
+}
+
+test {
+    _ = @import("hull_protocol_test.zig");
 }

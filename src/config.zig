@@ -28,7 +28,7 @@ pub const Window = struct {
     min_cols: u16 = 40,
     min_rows: u16 = 12,
     /// Tabs, each its own program on its own terminal: off. An app that
-    /// wants them (tycho) turns them on; the spike does not build them.
+    /// wants them turns them on; the spike does not build them.
     tabs: bool = false,
     /// Whether ⌘N opens a second window of the same app: off. One program
     /// per window either way.
@@ -143,9 +143,9 @@ test "parse an app" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const app = try parse(std.testing.allocator, arena.allocator(),
-        \\.{ .name = "WAKE", .program = .{"wake"}, .terminal = .{ .font_size = 16, .background_opacity = 50 } }
+        \\.{ .name = "Example", .program = .{"example"}, .terminal = .{ .font_size = 16, .background_opacity = 50 } }
     );
-    try std.testing.expectEqualStrings("WAKE", app.name);
+    try std.testing.expectEqualStrings("Example", app.name);
     try std.testing.expectEqual(@as(f32, 16), app.terminal.font_size);
     try std.testing.expectEqual(@as(u8, 80), app.terminal.background_opacity);
     try std.testing.expect(!app.window.tabs);
@@ -155,7 +155,7 @@ test "any hull.zon parses or is refused, never crashes" {
     try std.testing.fuzz({}, struct {
         fn one(_: void, smith: *std.testing.Smith) anyerror!void {
             var input: [2048:0]u8 = undefined;
-            const seed = ".{ .name = \"WAKE\", .window = .{ .cols = 100 }, .terminal = .{ .theme = \"rose-pine\" } }";
+            const seed = ".{ .name = \"Example\", .window = .{ .cols = 100 }, .terminal = .{ .theme = \"rose-pine\" } }";
             @memcpy(input[0..seed.len], seed);
             const n = smith.sliceWithHash(input[seed.len..], 0);
             input[seed.len + n] = 0;
@@ -164,4 +164,8 @@ test "any hull.zon parses or is refused, never crashes" {
             _ = parse(std.testing.allocator, arena.allocator(), input[0 .. seed.len + n :0]) catch return;
         }
     }.one, .{});
+}
+
+test {
+    _ = @import("config_test.zig");
 }

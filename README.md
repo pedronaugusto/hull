@@ -8,7 +8,13 @@ hull packages a terminal program as a desktop app. The program runs on a pseudo-
 - Settings a program can read and change while it runs, over `hull-protocol`.
 - A bundle made from the app's own build with `addApp`.
 
-Status: **0.0.0**, private. macOS works; Linux and Windows build. MIT.
+Status: **0.0.0**. CI builds and tests it on x86_64 and aarch64 Linux; its window is developed on macOS.
+
+## Scope
+
+hull runs one program per window and draws its terminal; it adds no tabs or splits of its own, reads nothing from
+the user's terminal configuration, and has no font discovery: an app names its fonts. Installers for each
+platform are not made yet; `addApp` makes a macOS bundle, and the same layout in a folder elsewhere.
 
 ## Stability
 
@@ -102,3 +108,9 @@ the app's build. hull's settings: `theme`, `background_opacity` (unavailable in 
 `padding`, `fullscreen`. Chosen values are kept in `~/Library/Application Support/<id>/hull-settings.json`.
 A theme change also reaches the program the standard way: new OSC 4/10/11 defaults and, under mode 2031,
 `CSI ? 997 ; 1|2 n`.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).
+
+`fonts/` holds JetBrains Mono, under the SIL Open Font License 1.1: see [fonts/OFL.txt](fonts/OFL.txt).
