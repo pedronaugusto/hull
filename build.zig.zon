@@ -7,8 +7,8 @@
     .dependencies = .{
         // safety by construction: the program's bytes taken as untrusted, sizes checked
         .aegis = .{
-            .url = "git+https://github.com/pedronaugusto/aegis#a0c467e1c6a65c24b75e4068c495703a94aee35e",
-            .hash = "aegis-0.2.4-rsxouj9yDQC9CdjMRwruqDGlipK_lKHyS_JODaoIQp4t",
+            .url = "git+https://github.com/pedronaugusto/aegis#dc3ed602f9c18b4473e9c649d1b1f36403603018",
+            .hash = "aegis-0.2.4-rsxouheoDQB7ckAmyiNbPdOdlqJnN1Sj56bM7_iPKhpY",
             .lazy = true,
         },
         // the protocol's lines, typed JSON
@@ -18,8 +18,8 @@
         },
         // shaping and rasterising: the family's
         .ztypeset = .{
-            .url = "git+https://github.com/pedronaugusto/ztypeset?ref=v0.3.0#7a5255a8c9e1bf5d3dbe1ae0ac49582cd71b2284",
-            .hash = "ztypeset-0.3.0-6GHizmwQHQEHJiScVi07vNhTQ7xDpJxvo3rhJ8GhRZS7",
+            .url = "git+https://github.com/pedronaugusto/ztypeset#55c4a5b933a939eaef6a77fd1e2492e1731e7680",
+            .hash = "ztypeset-0.3.0-6GHizm0THQHgv2Ilw9nzL7Q9KJqn0ugJOd8unK7do4i7",
             .lazy = true,
         },
         .sdl = .{
@@ -41,20 +41,20 @@
         },
         // the program's pseudo-terminal and process tree, POSIX and Windows: the line visor builds on
         .conduit = .{
-            .url = "git+https://github.com/pedronaugusto/conduit?ref=v0.9.3#9478e91d80cf10453da73dea0d36d73d3cf9cb4a",
-            .hash = "conduit-0.9.3-4rIA7_ftFABg9VCm81kwvwuJdKa5rI39Hro8KisDbj0b",
+            .url = "git+https://github.com/pedronaugusto/conduit#f18b7f72527a2a057cb0f3264a70ddaa142219ab",
+            .hash = "conduit-0.10.6-4rIA74LkFQDDKBn2xgAg3zAHygd46d9JSfVWO0_IM7sy",
             .lazy = true,
         },
     },
     .dev_dependencies = .{
         .preflight = .{
-            .url = "git+https://github.com/pedronaugusto/preflight?ref=ci-standard#0990716830e7768dacf8ef1729b47e3d57e939c6",
-            .hash = "preflight-0.18.6-LX1ZwhOnGgBj-tD4r44q15lPPyGXEMBDi7iw8W7Km9Bz",
+            .url = "git+https://github.com/pedronaugusto/preflight?ref=ci-standard#e3f74a6514d1a635cf55b79eefd56fd9863f8cc5",
+            .hash = "preflight-0.18.6-LX1ZwvnlGgCOzFGUi9vkd0g2Dw0LrM6X-fGby4c0IAUE",
         },
 
         .shakedown = .{
-            .url = "git+https://github.com/pedronaugusto/shakedown#9005b65d81e8efab8bda86bf5001de6351717fe0",
-            .hash = "shakedown-0.6.0-BR8U40gRGwA1j8mnIfkc4u_U4meNZwr9_YRrNv4zVzTM",
+            .url = "git+https://github.com/pedronaugusto/shakedown#ed5a8738c5786408a924b4dab5f5c3c0498abbd4",
+            .hash = "shakedown-0.6.0-BR8U4wEcGwCB0U0MLFTDRuUrRm6VIl4HzzjzLcwsrhbr",
         },
     },
 }

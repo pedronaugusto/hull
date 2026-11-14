@@ -61,7 +61,7 @@ pub const Options = struct {
 
 /// hull's end of the channel, the queues on each side of it, and what waits to go.
 pub const Channel = struct {
-    file: aegis.own.OwnedIo(std.Io.File, closeFile),
+    end: conduit.Channel.End,
     heard: std.Io.Queue(u8),
     told: std.Io.Queue(u8),
     rooms: [2][]u8,
@@ -75,10 +75,12 @@ pub fn start(p: *Program, gpa: std.mem.Allocator, io: std.Io, opts: Options) !vo
     const room = try gpa.alloc(u8, max_output);
     errdefer gpa.free(room);
     p.* = .{ .gpa = gpa, .io = io, .pty = undefined, .child = undefined, .output = .init(room), .room = room, .channel = null, .wake = opts.wake };
-    const ends: ?conduit.Channel = if (opts.channel) try .open() else null;
+    var ends: ?conduit.Channel = if (opts.channel) try .open() else null;
     // the program's end is the program's once it is spawned, or no one's
-    defer if (ends) |e| e.child.close(io);
-    errdefer if (ends) |e| e.parent.close(io);
+    defer if (ends) |*e| e.child.deinit(io);
+    // hull's end is the channel's once it is opened
+    var parent_held = ends != null;
+    errdefer if (parent_held) ends.?.parent.deinit(io);
 
     p.pty = try .open(gpa, io, .{ .rows = opts.size.rows, .cols = opts.size.cols, .x_pixel = opts.size.x_pixel, .y_pixel = opts.size.y_pixel, .console = .{ .passthrough = true } });
     errdefer p.pty.close(io);
@@ -90,11 +92,14 @@ pub fn start(p: *Program, gpa: std.mem.Allocator, io: std.Io, opts: Options) !vo
         // a session of its own on POSIX, so its terminal is its controlling one and Ctrl-C reaches it
         .detach = !is_windows,
         .descendants = .contain,
-        .channel = if (ends) |e| .{ .file = e.child, .variable = hp.env_name } else null,
+        .channel = if (ends) |*e| .{ .file = .of(e.child.borrow().*), .variable = hp.env_name } else null,
     });
     errdefer p.child.deinit(io);
     if (!is_windows) p.pty.closeSlave(io);
-    if (ends) |e| p.channel = try openChannel(gpa, e.parent);
+    if (ends) |*e| {
+        p.channel = try openChannel(gpa, e.parent);
+        parent_held = false;
+    }
     errdefer if (p.channel) |*ch| closeChannel(gpa, io, ch);
     try p.tasks.concurrent(io, readOutput, .{p});
     if (p.channel) |*ch| {
@@ -201,13 +206,20 @@ fn readOutput(p: *Program) std.Io.Cancelable!void {
 
 fn readChannel(p: *Program, ch: *Channel) std.Io.Cancelable!void {
     var buf: [4096]u8 = undefined;
+    var from = ch.end.reader(p.io, &buf);
+    const ends = from.ends();
     while (true) {
-        const n = ch.file.borrow().readStreaming(p.io, &.{&buf}) catch |err| switch (err) {
-            error.Canceled => return error.Canceled,
-            else => return, // the program closed it: there is nothing more to hear
+        ends.reader().fillMore() catch |err| switch (err) {
+            // the program closed it, or cut a read short: there is nothing more to hear
+            error.EndOfStream => return,
+            error.ReadFailed => switch (ends.settle(error.ReadFailed)) {
+                error.Canceled => return error.Canceled,
+                error.ReadFailed => return,
+            },
         };
-        if (n == 0) continue;
-        ch.heard.putAll(p.io, buf[0..n]) catch |err| switch (err) {
+        const got = ends.reader().buffered();
+        defer ends.reader().tossBuffered();
+        ch.heard.putAll(p.io, got) catch |err| switch (err) {
             error.Canceled => return error.Canceled,
             error.Closed => return,
         };
@@ -222,28 +234,27 @@ fn writeChannel(io: std.Io, ch: *Channel) std.Io.Cancelable!void {
             error.Canceled => return error.Canceled,
             error.Closed => return,
         };
-        ch.file.borrow().writeStreamingAll(io, buf[0..n]) catch |err| switch (err) {
+        var to = ch.end.writer(io, &.{});
+        const ends = to.ends();
+        ends.writer().writeAll(buf[0..n]) catch |err| switch (ends.settle(err)) {
             error.Canceled => return error.Canceled,
-            else => return, // the program closed it: what waits is never read
+            // the program closed it (the cause `Closed`), or the write failed: what waits is never read
+            error.WriteFailed => return,
         };
         // what was counted in before it was queued: never below zero
         _ = ch.waiting.fetchSubWrapping(.fromRaw(n), .acq_rel);
     }
 }
 
-fn openChannel(gpa: std.mem.Allocator, file: std.Io.File) !Channel {
+fn openChannel(gpa: std.mem.Allocator, file: conduit.OwnedFile) !Channel {
     const heard = try gpa.alloc(u8, max_heard);
     errdefer gpa.free(heard);
     const told = try gpa.alloc(u8, max_told);
-    return .{ .file = .init(file), .heard = .init(heard), .told = .init(told), .rooms = .{ heard, told } };
-}
-
-fn closeFile(file: *std.Io.File, io: std.Io) void {
-    file.close(io);
+    return .{ .end = .of(file), .heard = .init(heard), .told = .init(told), .rooms = .{ heard, told } };
 }
 
 fn closeChannel(gpa: std.mem.Allocator, io: std.Io, ch: *Channel) void {
-    ch.file.deinit(io);
+    ch.end.deinit(io);
     for (ch.rooms) |r| gpa.free(r);
 }
 
