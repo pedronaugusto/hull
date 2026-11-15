@@ -13,8 +13,8 @@
         },
         // the protocol's lines, typed JSON
         .strand = .{
-            .url = "git+https://github.com/pedronaugusto/strand#8b973aa1e6c54c3a56125a332212a80f2027615d",
-            .hash = "strand-0.15.0-8LNWVkmDNwDK8RScQrz4qFv1tVSJjsOxxypARQc4JcOB",
+            .url = "git+https://github.com/pedronaugusto/strand#78304c2b8e8e210d2b6799617ac936afc18eb3a3",
+            .hash = "strand-0.15.0-8LNWVs-RNwDfKVu251mXiJ8-lcGU7l5fvskLcwfxAuI7",
         },
         // shaping and rasterising: the family's
         .ztypeset = .{
