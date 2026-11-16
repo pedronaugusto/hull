@@ -4,6 +4,5 @@
     "x86_64-linux-gnu",
     "aarch64-linux-gnu"
   ],
-  "compile_once": true,
   "hardened": false
 }
