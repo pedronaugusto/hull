@@ -17,6 +17,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Platforms
 
 - The runner builds where SDL3 does: x86_64 and aarch64 Linux, macOS and Windows. For any other target hull is `hull-protocol` alone, and asking for the runner there stops the build naming why.
+- A macOS target with the host's architecture and ABI is built as the host's however it is named (`-Dtarget=aarch64-macos` on an Apple silicon Mac): SDL3 is given the host SDK's paths and keeps the target as asked, where it refused it as a cross build.
 
 ### Fixed
 

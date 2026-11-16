@@ -30,7 +30,7 @@ pub fn build(b: *std.Build) error{LazyDependencyNeeded}!void {
     const themes = themesTable(b, try b.dependencyLazy("ghostty_themes", .{}));
     const deps: RunnerDeps = .{
         .ghostty = try b.dependencyLazy("ghostty", ghosttyArgs(target)),
-        .sdl = try b.dependencyLazy("sdl", .{ .target = target, .optimize = optimize }),
+        .sdl = try sdlDependency(b, target, optimize, .lazy),
         .ztypeset = try b.dependencyLazy("ztypeset", .{ .target = target, .optimize = optimize }),
         .aegis = try b.dependencyLazy("aegis", .{ .target = target, .optimize = optimize }),
         .conduit = try b.dependencyLazy("conduit", .{ .target = target, .optimize = optimize }),
@@ -139,7 +139,7 @@ fn runnerTests(b: *std.Build, hull: *std.Build.Dependency, target: std.Build.Res
     const themes = themesTable(p, p.dependency("ghostty_themes", .{}));
     const deps: RunnerDeps = .{
         .ghostty = p.dependency("ghostty", ghosttyArgs(target)),
-        .sdl = p.dependency("sdl", .{ .target = target, .optimize = optimize }),
+        .sdl = sdlDependency(p, target, optimize, .eager),
         .ztypeset = p.dependency("ztypeset", .{ .target = target, .optimize = optimize }),
         .aegis = p.dependency("aegis", .{ .target = target, .optimize = optimize }),
         .conduit = p.dependency("conduit", .{ .target = target, .optimize = optimize }),
@@ -186,6 +186,45 @@ const RunnerDeps = struct {
     conduit: *std.Build.Dependency,
 };
 
+/// The host SDK's folder where `target` is the host's macOS under another name: its architecture, OS and ABI the
+/// host's, though asked for by name (`-Dtarget=aarch64-macos` on an Apple silicon Mac). Null for a native target,
+/// which finds the SDK itself, and for any other.
+fn hostSdk(b: *std.Build, target: std.Build.ResolvedTarget) ?[]const u8 {
+    const t = target.result;
+    const host = b.graph.host.result;
+    const hosts = !target.query.isNative() and t.os.tag == .macos and host.os.tag == .macos and t.cpu.arch == host.cpu.arch and t.abi == host.abi;
+    return if (hosts) std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &t) else null;
+}
+
+/// How a dependency is asked for: lazily, as a build does, or then and there.
+const Fetch = enum { lazy, eager };
+
+/// SDL3 for `target`. SDL takes a macOS target as native by how it was asked for, and wants the SDK's paths for any
+/// other; a target whose architecture, OS and ABI are the host's is the host's however it was named (`-Dtarget=
+/// aarch64-macos` on an Apple silicon Mac), so its SDL is given the host SDK's paths and builds as asked, its CPU
+/// among it. `.lazy` asks as a build does, `.eager` as development, which fetches it then and there; either way the
+/// arguments are the same, so both name one SDL.
+fn sdlDependency(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, comptime fetch: Fetch) if (fetch == .lazy) error{LazyDependencyNeeded}!*std.Build.Dependency else *std.Build.Dependency {
+    if (hostSdk(b, target)) |sdk| {
+        const args = .{
+            .target = target,
+            .optimize = optimize,
+            .system_include_path = std.Build.LazyPath{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/include" }) },
+            .system_framework_path = std.Build.LazyPath{ .cwd_relative = b.pathJoin(&.{ sdk, "System/Library/Frameworks" }) },
+            .library_path = std.Build.LazyPath{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) },
+        };
+        return switch (fetch) {
+            .lazy => b.dependencyLazy("sdl", args),
+            .eager => b.dependency("sdl", args),
+        };
+    }
+    const args = .{ .target = target, .optimize = optimize };
+    return switch (fetch) {
+        .lazy => b.dependencyLazy("sdl", args),
+        .eager => b.dependency("sdl", args),
+    };
+}
+
 // ReleaseFast whatever hull is built as: Debug terminal code is very slow, and its checks are Ghostty's to run. No
 // SIMD: its paths are C++ (simdutf, highway) the static archive does not carry at this commit.
 fn ghosttyArgs(target: std.Build.ResolvedTarget) struct { target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, simd: bool } {
@@ -222,6 +261,11 @@ fn runnerModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.l
     });
     mod.linkLibrary(ghostty.artifact("ghostty-vt-static"));
     mod.linkLibrary(sdl.artifact("SDL3"));
+    // The frameworks SDL3 links are found where its build found them.
+    if (hostSdk(b, target)) |sdk| {
+        mod.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "System/Library/Frameworks" }) });
+        mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) });
+    }
     mod.addAnonymousImport("fonts", .{ .root_source_file = b.path("fonts/fonts.zig") });
     mod.addAnonymousImport("ghostty_themes", .{ .root_source_file = themes });
     return mod;
