@@ -11,6 +11,7 @@ const builtin = @import("builtin");
 const aegis = @import("aegis");
 const conduit = @import("conduit");
 const hp = @import("hull-protocol");
+const log = std.log.scoped(.hull);
 
 const Program = @This();
 const is_windows = builtin.os.tag == .windows;
@@ -128,7 +129,7 @@ fn end(p: *Program) ?conduit.Term {
     const io = p.io;
     if (p.child.tryWait(io) catch null) |t| return t;
     if (!is_windows) {
-        p.child.kill(io, .hangup) catch {}; // glint-ignore: Z026 -- a child already gone: the wait below says so
+        p.child.kill(io, .hangup) catch |err| log.debug("hangup not sent ({t}): the child is gone, which the wait below says", .{err});
         if (p.child.waitTimeout(io, conduit.Deadline.within(grace.toIoDuration())) catch null) |t| return t;
     }
     return p.child.killWait(io, grace) catch null;
@@ -153,11 +154,11 @@ pub fn status(p: *Program) ?u8 {
 
 /// Writes all of `bytes` to the program's terminal, waiting out a full one: a key is never dropped.
 pub fn write(p: *Program, bytes: []const u8) void {
-    p.pty.writeFile().writeStreamingAll(p.io, bytes) catch {}; // glint-ignore: Z026 -- the program gone: the read task says it ended
+    p.pty.writeFile().writeStreamingAll(p.io, bytes) catch |err| log.debug("input dropped ({t}): the program is gone, which the read task says", .{err});
 }
 
 pub fn resize(p: *Program, size: Size) void {
-    p.pty.resize(p.io, size) catch {}; // glint-ignore: Z026 -- a pair already closed: the size goes with it
+    p.pty.resize(p.io, size) catch |err| log.debug("resize dropped ({t}): the terminal pair is closed", .{err});
 }
 
 /// What the program has said on the channel since the last take; 0 when it has said nothing or has no channel.

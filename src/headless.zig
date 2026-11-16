@@ -82,7 +82,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, s: *Session, opts: Options) !void
         if (s.output_bytes == before) {
             // nothing came: a short wait, never past the next moment
             const wait: Milliseconds = .fromRaw(@intFromFloat(std.math.clamp((until - seconds(start, now(io))) * 1000, 0, 5))); // safe: clamped to 5
-            io.sleep(wait.toIoDuration(), .awake) catch {}; // glint-ignore: Z026 -- canceled: the loop ends with hull
+            try io.sleep(wait.toIoDuration(), .awake);
         }
         switch (st.service(io, s)) {
             .fullscreen => st.windowFullscreen(s, st.fullscreen),
