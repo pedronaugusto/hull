@@ -115,8 +115,12 @@ pub fn dev(b: *std.Build, tools: type) void {
     const protocol_tests = b.addTest(.{ .name = "hull-protocol-tests", .filters = filters, .root_module = protocol });
     protocol_tests.root_module.addImport("shakedown", shakedown);
     test_step.dependOn(&b.addRunArtifact(protocol_tests).step);
-    if (runner) runnerTests(b, hull, target, optimize, filters, strand, shakedown, test_step);
-    tools.preflight.addCi(b, p, .{ .tests = test_step });
+    // The properties the fuzz job fuzzes: the protocol's, and those of the runner's modules that read input and
+    // need no more of libghostty than its header, in a binary that builds none of it.
+    const properties = b.step("properties", "Run the check properties, in test binaries that build nothing of libghostty's");
+    properties.dependOn(&b.addRunArtifact(protocol_tests).step);
+    if (runner) runnerTests(b, hull, target, optimize, filters, strand, shakedown, test_step, properties);
+    tools.preflight.addCi(b, p, .{ .tests = test_step, .fuzz_step = "properties" });
 }
 
 /// The targets SDL3 builds for, as `windowed` reads them: its Linux build takes per-target headers (D-Bus's, GLib's) for these alone.
@@ -132,7 +136,7 @@ fn windowed(t: std.Target) bool {
 }
 
 /// The runner's units, the properties of hull.zon, and an example app packaged through `addApp` and checked.
-fn runnerTests(b: *std.Build, hull: *std.Build.Dependency, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, filters: []const []const u8, strand: *std.Build.Module, shakedown: *std.Build.Module, test_step: *std.Build.Step) void {
+fn runnerTests(b: *std.Build, hull: *std.Build.Dependency, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, filters: []const []const u8, strand: *std.Build.Module, shakedown: *std.Build.Module, test_step: *std.Build.Step, properties: *std.Build.Step) void {
     const p = hull.builder;
     const protocol = hull.module("hull-protocol");
     // `dependency` fetches a lazy one itself: it ends this pass and runs the build again once it has it
@@ -148,6 +152,23 @@ fn runnerTests(b: *std.Build, hull: *std.Build.Dependency, target: std.Build.Res
     // The properties of hull.zon: shakedown, in the development graph alone.
     units.root_module.addImport("shakedown", shakedown);
     test_step.dependOn(&b.addRunArtifact(units).step);
+
+    // The keys script's, hull.zon's and the PNG reader's properties again, in a binary that reads libghostty's
+    // header and builds nothing of it: Zig's fuzzer runs every Run step of a session again, and two of
+    // libghostty's table generators then write one output path (their captured outputs are named by what Zig
+    // hashes of their arguments, which leaves out the generator), so a session could read one table as the other.
+    const pure = b.addTest(.{ .name = "hull-properties", .filters = filters, .root_module = b.createModule(.{
+        .root_source_file = p.path("src/properties.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "vt", .module = vtHeader(p, deps.ghostty, target, optimize) },
+            .{ .name = "aegis", .module = deps.aegis.module("aegis") },
+            .{ .name = "shakedown", .module = shakedown },
+        },
+    }) });
+    pure.root_module.addAnonymousImport("ghostty_themes", .{ .root_source_file = themes });
+    properties.dependOn(&b.addRunArtifact(pure).step);
 
     // an app as a program's build makes one: a program of its own, packaged, and its bundle checked
     const example = b.addExecutable(.{ .name = "hello", .root_module = b.createModule(.{
@@ -231,6 +252,14 @@ fn ghosttyArgs(target: std.Build.ResolvedTarget) struct { target: std.Build.Reso
     return .{ .target = target, .optimize = .fast, .simd = false };
 }
 
+// libghostty-vt's header as a module: its types and declarations, which need nothing of libghostty built.
+fn vtHeader(b: *std.Build, ghostty: *std.Build.Dependency, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) *std.Build.Module {
+    const vt_h = b.addTranslateC(.{ .root_source_file = ghostty.path("include/ghostty/vt.h"), .target = target, .optimize = optimize });
+    vt_h.addIncludePath(ghostty.path("include"));
+    vt_h.defineCMacro("GHOSTTY_STATIC", null);
+    return vt_h.createModule();
+}
+
 // The runner's module, on its dependencies.
 fn runnerModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, protocol: *std.Build.Module, strand: *std.Build.Module, themes: std.Build.LazyPath, deps: RunnerDeps) *std.Build.Module {
     const ghostty = deps.ghostty;
@@ -238,9 +267,7 @@ fn runnerModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.l
     const zt = deps.ztypeset;
     const aegis = deps.aegis;
     const conduit = deps.conduit;
-    const vt_h = b.addTranslateC(.{ .root_source_file = ghostty.path("include/ghostty/vt.h"), .target = target, .optimize = optimize });
-    vt_h.addIncludePath(ghostty.path("include"));
-    vt_h.defineCMacro("GHOSTTY_STATIC", null);
+    const vt_h = vtHeader(b, ghostty, target, optimize);
     const sdl_h = b.addTranslateC(.{ .root_source_file = b.path("src/c/sdl.h"), .target = target, .optimize = optimize });
     sdl_h.addIncludePath(sdl.path("include"));
     const mod = b.createModule(.{
@@ -250,7 +277,7 @@ fn runnerModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.l
         .link_libc = true,
         .link_libcpp = true,
         .imports = &.{
-            .{ .name = "vt", .module = vt_h.createModule() },
+            .{ .name = "vt", .module = vt_h },
             .{ .name = "sdl", .module = sdl_h.createModule() },
             .{ .name = "hull-protocol", .module = protocol },
             .{ .name = "strand", .module = strand },

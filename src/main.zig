@@ -190,6 +190,8 @@ test {
     _ = @import("render.zig");
     _ = @import("cpu.zig");
     _ = @import("keys.zig");
+    _ = @import("presses.zig");
+    _ = @import("key.zig");
     _ = @import("pngdec.zig");
     _ = @import("settings.zig");
     _ = @import("Program.zig");
