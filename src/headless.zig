@@ -111,6 +111,7 @@ fn save(gpa: std.mem.Allocator, io: std.Io, cv: Canvas, path: []const u8) !void 
 /// "2.0:enter,2.5:right,3:a": keys at seconds.
 pub fn parsePresses(gpa: std.mem.Allocator, spec: []const u8) ![]Press {
     var out: std.ArrayList(Press) = .empty;
+    errdefer out.deinit(gpa);
     var it = std.mem.tokenizeScalar(u8, spec, ',');
     while (it.next()) |item| {
         const colon = std.mem.findScalar(u8, item, ':') orelse return error.BadKeys;
@@ -169,6 +170,11 @@ fn plain(name: []const u8) ?vt_mod.Key {
     if (name.len == 1 and name[0] >= 'a' and name[0] <= 'z')
         return .{ .action = .press, .key = @intCast(c.GHOSTTY_KEY_A + @as(c_int, name[0] - 'a')), .text = name, .unshifted = name[0] };
     return null;
+}
+
+test "a keys spec refused after a key it read gives back what it read" {
+    try std.testing.expectError(error.BadKeys, parsePresses(std.testing.allocator, "1:enter,x"));
+    try std.testing.expectError(error.InvalidCharacter, parsePresses(std.testing.allocator, "1:enter,y:enter"));
 }
 
 test "any keys spec parses or is refused, never crashes" {

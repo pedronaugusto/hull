@@ -10,6 +10,10 @@ hull packages a terminal program as a desktop app. The program runs on a pseudo-
 
 Status: **0.0.0**. CI runs its tests on x86_64 Linux and compiles it for aarch64 Linux; its window is developed on macOS.
 
+The runner builds where SDL3 does: x86_64 and aarch64 Linux, macOS and Windows. For any other target hull is
+`hull-protocol` alone (`.runner = false`), and asking for the runner there stops the build with that reason; CI
+runs the protocol's tests on FreeBSD's kernel and on riscv64 Linux's.
+
 ## Scope
 
 hull runs one program per window and draws its terminal; it adds no tabs or splits of its own, reads nothing from
@@ -29,13 +33,16 @@ The app's repository carries its `hull.zon` and icon; its build makes the app:
 ```zig
 const hull = @import("hull");
 
-const app = hull.addApp(b, b.dependency("hull", .{ .target = target, .optimize = optimize }), .{
+const app = try hull.addApp(b, b.dependency("hull", .{ .target = target, .optimize = optimize }), .{
     .program = exe,                       // the program, unchanged
     .config = b.path("app/hull.zon"),     // who it is, its window, its terminal
     .icon = b.path("app/icon.png"),       // square, 1024 px
 });
 b.step("app", "Package the program as an app").dependOn(app.step);
 ```
+
+The build function returns `!void` for the `try`: on the first run hull's own dependencies are still to be
+fetched, and the error asks for them and a second run.
 
 `zig build app` puts `<name>.app` in `zig-out/app` on macOS: hull's runner as `Contents/MacOS/<name>`, the
 program in `Contents/Resources/program`, its `hull.zon` beside, an `.icns` of the icon, ad-hoc signed. Elsewhere

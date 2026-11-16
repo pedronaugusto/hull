@@ -25,6 +25,8 @@ pub fn build(b: *std.Build) error{LazyDependencyNeeded}!void {
         .imports = &.{.{ .name = "strand", .module = strand }},
     });
     if (!with_runner) return;
+    // Asked for where SDL3 does not build: refused as the build is configured, naming why.
+    if (!windowed(target.result)) std.debug.panic("hull's runner draws through SDL3, which builds for {s}; {t} {t} has hull-protocol alone (`.runner = false`)", .{ windowed_targets, target.result.cpu.arch, target.result.os.tag });
     const themes = themesTable(b, try b.dependencyLazy("ghostty_themes", .{}));
     const deps: RunnerDeps = .{
         .ghostty = try b.dependencyLazy("ghostty", ghosttyArgs(target)),
@@ -73,8 +75,16 @@ pub const Packaged = struct {
 
 /// `app` packaged by `hull`, a dependency asked for the program's target: on macOS a bundle named for the app,
 /// hull's runner inside it under the app's name, the program and its `hull.zon` beside. The app's build makes a
-/// step of it: `b.step("app", "…").dependOn(packaged.step)`.
-pub fn addApp(b: *std.Build, hull: *std.Build.Dependency, app: App) Packaged {
+/// step of it: `b.step("app", "…").dependOn(packaged.step)`. `error.LazyDependencyNeeded` while hull's own
+/// dependencies are still to be fetched: hull has no runner yet, and the build returns the error so that it is
+/// fetched and configured again.
+pub fn addApp(b: *std.Build, hull: *std.Build.Dependency, app: App) error{LazyDependencyNeeded}!Packaged {
+    if (hull.builder.graph.needed_lazy_dependencies.count() != 0) return error.LazyDependencyNeeded;
+    return package(b, hull, app);
+}
+
+// `addApp` once hull's runner and bundler are declared.
+fn package(b: *std.Build, hull: *std.Build.Dependency, app: App) Packaged {
     const bundle = b.addRunArtifact(hull.artifact("hull-bundle"));
     bundle.addArtifactArg2(hull.artifact("hull"), .{});
     bundle.addArtifactArg2(app.program, .{});
@@ -92,10 +102,38 @@ pub fn dev(b: *std.Build, tools: type) void {
     const optimize = b.standardOptimizeOption(.{});
     const test_filter = b.option([]const u8, "test-filter", "Select tests by name");
     const filters: []const []const u8 = if (test_filter) |filter| &.{filter} else &.{};
-    const hull = b.dependency("hull", .{ .target = target, .optimize = optimize });
+    // The runner and its tests where SDL3 builds (`windowed`); elsewhere hull is hull-protocol, and its tests are the protocol's and the themes table's.
+    const runner = windowed(target.result);
+    const hull = b.dependency("hull", .{ .target = target, .optimize = optimize, .runner = runner });
     const p = hull.builder;
     const test_step = b.step("test", "Run the tests");
     const strand = p.dependency("strand", .{ .target = target, .optimize = optimize }).module("strand");
+    const protocol = hull.module("hull-protocol");
+    const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize }).module("shakedown");
+    const table_tests = b.addTest(.{ .name = "hull-themes-tests", .filters = filters, .root_module = b.createModule(.{ .root_source_file = p.path("tools/themes.zig"), .target = target, .optimize = optimize }) });
+    test_step.dependOn(&b.addRunArtifact(table_tests).step);
+    const protocol_tests = b.addTest(.{ .name = "hull-protocol-tests", .filters = filters, .root_module = protocol });
+    protocol_tests.root_module.addImport("shakedown", shakedown);
+    test_step.dependOn(&b.addRunArtifact(protocol_tests).step);
+    if (runner) runnerTests(b, hull, target, optimize, filters, strand, shakedown, test_step);
+    tools.preflight.addCi(b, p, .{ .tests = test_step });
+}
+
+/// The targets SDL3 builds for, as `windowed` reads them: its Linux build takes per-target headers (D-Bus's, GLib's) for these alone.
+const windowed_targets = "x86_64 and aarch64 Linux, macOS and Windows";
+
+/// Whether hull's runner builds for `t`: where SDL3 does.
+fn windowed(t: std.Target) bool {
+    return switch (t.os.tag) {
+        .macos, .windows => true,
+        .linux => t.cpu.arch == .x86_64 or t.cpu.arch == .aarch64,
+        else => false,
+    };
+}
+
+/// The runner's units, the properties of hull.zon, and an example app packaged through `addApp` and checked.
+fn runnerTests(b: *std.Build, hull: *std.Build.Dependency, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, filters: []const []const u8, strand: *std.Build.Module, shakedown: *std.Build.Module, test_step: *std.Build.Step) void {
+    const p = hull.builder;
     const protocol = hull.module("hull-protocol");
     // `dependency` fetches a lazy one itself: it ends this pass and runs the build again once it has it
     const themes = themesTable(p, p.dependency("ghostty_themes", .{}));
@@ -107,15 +145,9 @@ pub fn dev(b: *std.Build, tools: type) void {
         .conduit = p.dependency("conduit", .{ .target = target, .optimize = optimize }),
     };
     const units = b.addTest(.{ .name = "hull-tests", .filters = filters, .root_module = runnerModule(p, target, optimize, protocol, strand, themes, deps) });
-    // The properties of hull.zon and hull-protocol: shakedown, in the development graph alone.
-    const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize }).module("shakedown");
+    // The properties of hull.zon: shakedown, in the development graph alone.
     units.root_module.addImport("shakedown", shakedown);
-    const table_tests = b.addTest(.{ .name = "hull-themes-tests", .filters = filters, .root_module = b.createModule(.{ .root_source_file = p.path("tools/themes.zig"), .target = target, .optimize = optimize }) });
-    test_step.dependOn(&b.addRunArtifact(table_tests).step);
     test_step.dependOn(&b.addRunArtifact(units).step);
-    const protocol_tests = b.addTest(.{ .name = "hull-protocol-tests", .filters = filters, .root_module = protocol });
-    protocol_tests.root_module.addImport("shakedown", shakedown);
-    test_step.dependOn(&b.addRunArtifact(protocol_tests).step);
 
     // an app as a program's build makes one: a program of its own, packaged, and its bundle checked
     const example = b.addExecutable(.{ .name = "hello", .root_module = b.createModule(.{
@@ -123,13 +155,13 @@ pub fn dev(b: *std.Build, tools: type) void {
         .target = target,
         .optimize = optimize,
     }) });
-    const packaged = addApp(b, hull, .{ .program = example, .config = p.path("examples/hello/hull.zon") });
+    // `dependency` fetched each of hull's dependencies above, so its runner and bundler are declared.
+    const packaged = package(b, hull, .{ .program = example, .config = p.path("examples/hello/hull.zon") });
     const check = b.addRunArtifact(hull.artifact("hull-bundle"));
     check.addArg("--check");
     check.addDirectoryArg2(packaged.dir, .{});
     check.addArg("Hello");
     test_step.dependOn(&check.step);
-    tools.preflight.addCi(b, p, .{ .tests = test_step });
 }
 
 // Ghostty's themes as hull's table, written by `tools/themes.zig` where hull is built from the folder Ghostty pins.
